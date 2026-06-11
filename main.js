@@ -71,7 +71,7 @@ async function loadMTA() {
 // ----------------------------------------------------------
 async function loadBusSigns() {
   const url =
-    "https://data.cityofnewyork.us/resource/qiz3-axqb.json" +
+    "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
     "?$select=latitude,longitude,sign_description" +
     "&$where=upper(sign_description)%20like%20'%25BUS%25'";
 
@@ -95,18 +95,24 @@ async function loadBusSigns() {
 // 3. DOT Bus Lanes – Local Streets
 // ----------------------------------------------------------
 async function loadBusLanes() {
-  const url = "https://data.cityofnewyork.us/resource/6b9e-px7p.geojson";
+  const url = "https://data.cityofnewyork.us/resource/ycrg-ses3.json";
 
-  const data = await fetch(url).then((r) => r.json());
 
-  L.geoJSON(data, {
-    style: {
-      color: "orange",
-      weight: 3,
-      opacity: 0.8
-    }
-  }).addTo(busLanesLayer);
-}
+const rows = await fetch(url).then(r => r.json());
+
+
+const geojson = {
+  type: "FeatureCollection",
+  features: rows.map(r => ({
+    type: "Feature",
+    geometry: r.the_geom, // already GeoJSON
+    properties: r
+  }))
+};
+
+L.geoJSON(geojson, { style: { color: "orange", weight: 3 } })
+  .addTo(busLanesLayer);
+
 
 // ----------------------------------------------------------
 // Load all datasets
