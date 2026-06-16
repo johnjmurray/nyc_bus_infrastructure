@@ -11,7 +11,6 @@ async function loadConfig() {
 // ----------------------------------------------------------
 const map = L.map("map").setView([40.71, -74.00], 12);
 
-// Carto Positron basemap
 L.tileLayer(
   "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
   {
@@ -27,25 +26,25 @@ const busSignsLayer = L.layerGroup().addTo(map);
 const busLanesLayer = L.layerGroup().addTo(map);
 
 // ----------------------------------------------------------
-// 1. Load MTA BusTime GTFS
+// 1. Load cached GTFS (routes + stops) from /data/
 // ----------------------------------------------------------
-async function loadMTA_GTFS(key) {
-  const routesURL = `https://bustime.mta.info/api/gtfs/routes?key=${key}`;
-  const stopsURL  = `https://bustime.mta.info/api/gtfs/stops?key=${key}`;
+async function loadCachedGTFS() {
+  const stopsURL = "data/stops.json";
+  const routesURL = "data/routes.json";
 
-  const [routesResp, stopsResp] = await Promise.all([
-    fetch(routesURL),
-    fetch(stopsURL)
+  const [stopsResp, routesResp] = await Promise.all([
+    fetch(stopsURL),
+    fetch(routesURL)
   ]);
 
+  const stops = await stopsResp.json();
   const routes = await routesResp.json();
-  const stops  = await stopsResp.json();
 
   drawStops(stops);
   drawRoutes(routes);
 }
 
-// Draw stops
+// Stops
 function drawStops(stops) {
   stops.forEach(s => {
     L.circleMarker([s.lat, s.lon], {
@@ -59,12 +58,12 @@ function drawStops(stops) {
   });
 }
 
-// Draw routes (BusTime includes shapes)
+// Routes (BusTime includes shapes)
 function drawRoutes(routes) {
-  routes.forEach(route => {
-    if (!route.shapes) return;
+  routes.forEach(rt => {
+    if (!rt.shapes) return;
 
-    route.shapes.forEach(shape => {
+    rt.shapes.forEach(shape => {
       const pts = shape.shape_points.map(pt => [pt.lat, pt.lon]);
 
       L.polyline(pts, {
@@ -73,7 +72,7 @@ function drawRoutes(routes) {
         opacity: 0.6
       })
       .addTo(busRoutesLayer)
-      .bindTooltip(route.route_short_name || route.route_id);
+      .bindTooltip(rt.route_short_name || rt.route_id);
     });
   });
 }
@@ -99,7 +98,7 @@ async function loadBusSigns() {
       fillOpacity: 0.8
     })
     .addTo(busSignsLayer)
-    .bindTooltip(sign.sign_description || "BUS sign");
+    .bindTooltip(sign.sign_description);
   });
 }
 
@@ -119,38 +118,15 @@ async function loadBusLanes() {
     }))
   };
 
-  L.geoJSON(gj, {
-    style: { color: "orange", weight: 3 }
-  }).addTo(busLanesLayer);
+  L.geoJSON(gj, { style: { color: "orange", weight: 3 } })
+    .addTo(busLanesLayer);
 }
 
 // ----------------------------------------------------------
 // Init
 // ----------------------------------------------------------
 (async function init() {
-  try {
-    const cfg = await loadConfig();
-    const key = cfg.MTA_KEY;
-
-    await loadMTA_GTFS(key);
-    await loadBusSigns();
-    await loadBusLanes();
-  } catch (err) {
-    console.error(err);
-    alert("Error loading GTFS or overlays.");
-  }
+  await loadCachedGTFS();
+  await loadBusSigns();
+  await loadBusLanes();
 })();
-
-// ----------------------------------------------------------
-// Layer Control UI
-// ----------------------------------------------------------
-L.control.layers(
-  {},
-  {
-    "MTA Bus Stops": busStopsLayer,
-    "MTA Bus Routes": busRoutesLayer,
-    'DOT "BUS" Signs': busSignsLayer,
-    "DOT Bus Lanes": busLanesLayer
-  },
-  { collapsed: false }
-).addTo(map);
