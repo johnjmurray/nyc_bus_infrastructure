@@ -98,6 +98,39 @@ function fitToInfrastructure() {
 }
 
 // ----------------------------------------------------------
+// Coordinate Conversion
+// ----------------------------------------------------------
+
+/**
+ * Convert from EPSG:2260 (State Plane NYC Long Island) to WGS84 (lat/lon)
+ * EPSG:2260 uses US feet, centered on Long Island
+ * Approximation using proj4js-style parameters
+ */
+function epsg2260ToWGS84(x, y) {
+  // EPSG:2260 parameters
+  const lon0 = -74.0; // Central meridian
+  const lat0 = 40.1667; // Latitude of origin (40°10'N)
+  const k0 = 0.9996; // Scale factor
+  const fe = 1312333.333; // False easting (in feet)
+  const fn = 0; // False northing (in feet)
+  
+  // Remove false easting/northing and convert feet to meters
+  const xm = (x - fe) * 0.3048;
+  const ym = (y - fn) * 0.3048;
+  
+  // Mercator inverse formulas (simplified)
+  // For accurate results, a full proj4 library is recommended
+  const a = 6378137.0; // WGS84 semi-major axis
+  const lat = Math.asin(Math.sin(lat0 * Math.PI / 180) * Math.cos(ym / a) + 
+                        Math.cos(lat0 * Math.PI / 180) * Math.sin(ym / a) * 
+                        Math.cos(xm / a / Math.cos(lat0 * Math.PI / 180))) * 180 / Math.PI;
+  const lon = (lon0 * Math.PI / 180 + Math.atan2(Math.sin(xm / a / Math.cos(lat0 * Math.PI / 180)) * 
+               Math.sin(ym / a), Math.cos(ym / a))) * 180 / Math.PI;
+  
+  return [lat, lon];
+}
+
+// ----------------------------------------------------------
 // Cached GTFS Data
 // ----------------------------------------------------------
 
@@ -187,17 +220,22 @@ async function loadBusSigns() {
   try {
     const url =
       "https://data.cityofnewyork.us/resource/qiz3-aqxq.json" +
-      "?$select=latitude,longitude,sign_description" +
+      "?$select=sign_x_coord,sign_y_coord,sign_description" +
       "&$where=upper(sign_description)%20like%20'%25BUS%25'" +
       "&$limit=50000";
 
     const data = await fetchJSON(url);
 
     data.forEach(sign => {
-      const lat = safeNumber(sign.latitude);
-      const lon = safeNumber(sign.longitude);
+      const x = safeNumber(sign.sign_x_coord);
+      const y = safeNumber(sign.sign_y_coord);
 
-      if (lat === null || lon === null) return;
+      if (x === null || y === null) return;
+
+      // Convert from EPSG:2260 to WGS84
+      const [lat, lon] = epsg2260ToWGS84(x, y);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
       L.circleMarker([lat, lon], {
         radius: 4,
