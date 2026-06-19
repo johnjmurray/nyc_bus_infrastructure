@@ -301,6 +301,8 @@ async function loadBusSigns() {
       // Color bus lane signs indigo, bus stop signs light blue
       const signColor = desc.includes("LANE")
         ? "#4B0082" // indigo
+        : desc.includes("ONLY")
+        ? "#4B0082" // light blue
         : desc.includes("STOP")
         ? "#66CCFF" // light blue
         : "#6c757d"; // default gray
