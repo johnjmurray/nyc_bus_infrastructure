@@ -221,10 +221,11 @@ function drawStops(stops) {
 
     if (lat === null || lon === null) return;
 
+    // Use a light blue for bus stop markers
     L.circleMarker([lat, lon], {
       radius: 3,
-      color: "#0066ff",
-      fillColor: "#0066ff",
+      color: "#66CCFF",
+      fillColor: "#66CCFF",
       fillOpacity: 0.7,
       weight: 1
     })
@@ -295,14 +296,23 @@ async function loadBusSigns() {
 
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
-      const tooltipText = sign.sign_order_completed 
-        ? `${sign.sign_description}<br>Completed: ${sign.sign_order_completed}`
+      const desc = (sign.sign_description || "").toUpperCase();
+
+      // Color bus lane signs indigo, bus stop signs light blue
+      const signColor = desc.includes("LANE")
+        ? "#4B0082" // indigo
+        : desc.includes("STOP")
+        ? "#66CCFF" // light blue
+        : "#6c757d"; // default gray
+
+      const tooltipText = sign.order_completed_on_date
+        ? `${sign.sign_description}<br>Completed: ${sign.order_completed_on_date}`
         : sign.sign_description || "Bus Sign";
 
       L.circleMarker([lat, lon], {
         radius: 4,
-        color: "#d62828",
-        fillColor: "#d62828",
+        color: signColor,
+        fillColor: signColor,
         fillOpacity: 0.8,
         weight: 1
       })
