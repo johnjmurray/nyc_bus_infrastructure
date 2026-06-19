@@ -279,7 +279,7 @@ async function loadBusSigns() {
     const url =
       "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
       "?$select=sign_x_coord,sign_y_coord,sign_description" +
-      "&$where=upper(sign_description)%20like%20'%25BUS%25'" +
+      "&$where=upper(sign_description)%20like%20'%25BUS%25'%20AND%20record_type%20=%20'Current'" +
       "&$limit=50000";
 
     const data = await fetchJSON(url);
