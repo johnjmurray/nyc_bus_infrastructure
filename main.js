@@ -369,10 +369,14 @@ function drawShapes(shapes) {
 async function loadBusSigns() {
   try {
     const url =
-      "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
-      "?$select=sign_x_coord,sign_y_coord,sign_description" +
-      "&$where=upper(sign_description)%20like%20'%25BUS%25'" +
-      "&$limit=50000";
+-      "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
+-      "?$select=sign_x_coord,sign_y_coord,sign_description" +
+-      "&$where=upper(sign_description)%20like%20'%25BUS%25'" +
+-      "&$limit=50000";
++      "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
++      "?$select=sign_x_coord,sign_y_coord,sign_description,record_type" +
++      "&$where=record_type='Current'%20AND%20upper(sign_description)%20like%20'%25BUS%25'" +
++      "&$limit=50000";
 
     const data = await fetchJSON(url);
 
