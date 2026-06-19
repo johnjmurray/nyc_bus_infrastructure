@@ -278,8 +278,8 @@ async function loadBusSigns() {
   try {
     const url =
       "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
-      "?$select=sign_x_coord,sign_y_coord,sign_description" +
-      "&$where=upper(sign_description)%20like%20'%25BUS%25'%20AND%20record_type%20=%20'Current'" +
+      "?$select=sign_x_coord,sign_y_coord,sign_description,sign_order_completed" +
+      "&$where=(upper(sign_description)%20like%20'%25BUS%20STOP%25'%20OR%20upper(sign_description)%20like%20'%25BUS%20LANE%25')%20AND%20record_type%20=%20'Current'" +
       "&$limit=50000";
 
     const data = await fetchJSON(url);
@@ -295,6 +295,10 @@ async function loadBusSigns() {
 
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
+      const tooltipText = sign.sign_order_completed 
+        ? `${sign.sign_description}<br>Completed: ${sign.sign_order_completed}`
+        : sign.sign_description || "Bus Sign";
+
       L.circleMarker([lat, lon], {
         radius: 4,
         color: "#d62828",
@@ -302,9 +306,7 @@ async function loadBusSigns() {
         fillOpacity: 0.8,
         weight: 1
       })
-        .bindTooltip(
-          sign.sign_description || "Bus Sign"
-        )
+        .bindTooltip(tooltipText)
         .addTo(busSignsLayer);
     });
 
