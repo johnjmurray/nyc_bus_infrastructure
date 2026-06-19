@@ -98,48 +98,130 @@ function fitToInfrastructure() {
 }
 
 // ----------------------------------------------------------
-// Coordinate Conversion
+// Proj4 integration and helpers
+// ----------------------------------------------------------
+
+function ensureProj4() {
+  if (typeof window !== 'undefined' && window.proj4) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    // Load proj4 from CDN
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.8.0/proj4.js';
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load proj4.js from CDN'));
+    document.head.appendChild(script);
+  });
+}
+
+function defineEPSG2260() {
+  if (!window.proj4) return;
+
+  // Define EPSG:2260 (NAD83 / New York Long Island (ftUS))
+  // Using proj4 definition with US survey foot units
+  const def = "+proj=lcc +lat_1=40.66666666666666 +lat_2=41.03333333333333 +lat_0=40.16666666666666 +lon_0=-74 +x_0=984250.0 +y_0=0 +datum=NAD83 +units=us-ft +no_defs";
+
+  try {
+    // Only define if not already present
+    if (!proj4.defs['EPSG:2260']) {
+      proj4.defs('EPSG:2260', def);
+    }
+  } catch (e) {
+    // Some proj4 builds use proj4.defs as function only; still safe to call
+    try {
+      proj4('EPSG:2260', def);
+    } catch (ignore) {}
+  }
+}
+
+function projectPointEPSG2260ToWGS84(x_ft, y_ft) {
+  // proj4 returns [lon, lat]
+  const p = proj4('EPSG:2260', 'WGS84', [Number(x_ft), Number(y_ft)]);
+  return [p[1], p[0]]; // [lat, lon]
+}
+
+function isLikelyProjectedCoord(coord) {
+  // Heuristic: geographic lon/lat are within [-180,180] and [-90,90]. Projected (US-ft) will have much larger magnitudes.
+  if (!Array.isArray(coord) || coord.length < 2) return false;
+  const x = Math.abs(coord[0]);
+  const y = Math.abs(coord[1]);
+  return x > 1000 || y > 1000;
+}
+
+function reprojectGeometryToWGS84(geom) {
+  if (!geom || !geom.type || !geom.coordinates) return geom;
+
+  function reprojectCoords(coords) {
+    if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+      if (!isLikelyProjectedCoord(coords)) return [coords[1], coords[0]]; // already lon/lat
+      return projectPointEPSG2260ToWGS84(coords[0], coords[1]);
+    }
+
+    return coords.map(c => reprojectCoords(c));
+  }
+
+  return {
+    type: geom.type,
+    coordinates: reprojectCoords(geom.coordinates)
+  };
+}
+
+// ----------------------------------------------------------
+// Marker icons (SVG data URLs)
+// ----------------------------------------------------------
+
+function svgDataUrl(color, letter) {
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'>\n  <circle cx='18' cy='18' r='16' fill='${color}' stroke='#ffffff' stroke-width='2'/>\n  <text x='18' y='22' font-family='Arial, sans-serif' font-size='14' fill='#ffffff' text-anchor='middle' font-weight='bold'>${letter}</text>\n</svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
+
+const stopIcon = L.icon({
+  iconUrl: svgDataUrl('#0066ff', 'S'),
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -12]
+});
+
+const laneIcon = L.icon({
+  iconUrl: svgDataUrl('#f77f00', 'L'),
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -12]
+});
+
+const defaultSignIcon = L.icon({
+  iconUrl: svgDataUrl('#d62828', 'B'),
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -12]
+});
+
+// ----------------------------------------------------------
+// Coordinate Conversion (fallback implementation preserved)
 // ----------------------------------------------------------
 
 /**
- * Convert from EPSG:2260 (NAD_1983_StatePlane_New_York_Long_Island_FIPS_3104_Feet)
- * to WGS84 (lat/lon)
- *
- * Projection: Lambert Conformal Conic (2SP)
- * Parameters (EPSG:2260):
- *  - Latitude of 1st standard parallel: 40.66666666666666
- *  - Latitude of 2nd standard parallel: 41.03333333333333
- *  - Latitude of origin: 40.16666666666666
- *  - Central meridian: -74.0
- *  - False easting: 984250.0 (US survey feet)
- *  - False northing: 0.0 (US survey feet)
- *
- * This implementation performs the inverse Lambert Conformal Conic (2SP) projection
- * on the NAD83 ellipsoid and converts US survey feet to meters.
- * It's a direct implementation of the Snyder formulas with an iterative solution
- * to recover latitude from the isometric latitude (t).
+ * Fallback inverse Lambert Conformal Conic (2SP) implementation
+ * on NAD83 ellipsoid. Used if proj4 is not available.
  */
-function epsg2260ToWGS84(x_ft, y_ft) {
+function epsg2260InverseLCCFallback(x_ft, y_ft) {
   // EPSG:2260 LCC parameters
-  const lat1 = 40.66666666666666 * Math.PI / 180; // first standard parallel (radians)
-  const lat2 = 41.03333333333333 * Math.PI / 180; // second standard parallel (radians)
-  const lat0 = 40.16666666666666 * Math.PI / 180; // latitude of origin (radians)
-  const lon0 = -74.0 * Math.PI / 180; // central meridian (radians)
+  const lat1 = 40.66666666666666 * Math.PI / 180;
+  const lat2 = 41.03333333333333 * Math.PI / 180;
+  const lat0 = 40.16666666666666 * Math.PI / 180;
+  const lon0 = -74.0 * Math.PI / 180;
 
-  // False easting / northing in US survey feet (EPSG uses US survey feet)
   const x0_ft = 984250.0;
   const y0_ft = 0.0;
-
-  // Convert US survey feet to meters
-  const usFtToMeters = 0.3048006096012192; // exact conversion for US survey foot
-
+  const usFtToMeters = 0.3048006096012192;
   const x = (x_ft - x0_ft) * usFtToMeters;
   const y = (y_ft - y0_ft) * usFtToMeters;
 
-  // NAD83 / GRS80 ellipsoid constants
-  const a = 6378137.0; // semi-major axis (meters)
-  const f = 1 / 298.257222101; // flattening for GRS80
-  const e = Math.sqrt(2 * f - f * f); // eccentricity
+  const a = 6378137.0;
+  const f = 1 / 298.257222101;
+  const e = Math.sqrt(2 * f - f * f);
 
   function m(phi) {
     return Math.cos(phi) / Math.sqrt(1 - (e * e) * Math.sin(phi) * Math.sin(phi));
@@ -157,20 +239,15 @@ function epsg2260ToWGS84(x_ft, y_ft) {
   const t2 = t(lat2);
   const t0 = t(lat0);
 
-  // n, F, rho0 as per Snyder
   const n = Math.log(m1 / m2) / Math.log(t1 / t2);
   const F = m1 / (n * Math.pow(t1, n));
   const rho0 = a * F * Math.pow(t0, n);
 
-  // compute rho and theta from x,y (note typical forward uses x = rho*sin(n*(lambda-lambda0)))
   const rho = Math.sqrt(x * x + Math.pow(rho0 - y, 2));
   const theta = Math.atan2(x, rho0 - y);
-
-  // compute t from rho
   const tVal = Math.pow(rho / (a * F), 1 / n);
 
-  // iterative solution to recover phi from t
-  let phi = Math.PI / 2 - 2 * Math.atan(tVal); // initial guess
+  let phi = Math.PI / 2 - 2 * Math.atan(tVal);
 
   for (let i = 0; i < 15; i++) {
     const esin = e * Math.sin(phi);
@@ -186,6 +263,21 @@ function epsg2260ToWGS84(x_ft, y_ft) {
   const lon = (lon0 + theta / n) * 180 / Math.PI;
 
   return [lat, lon];
+}
+
+/**
+ * Main wrapper to convert EPSG:2260 -> WGS84. Uses proj4 if available, otherwise falls back.
+ */
+function epsg2260ToWGS84(x_ft, y_ft) {
+  try {
+    if (typeof window !== 'undefined' && window.proj4 && proj4.defs && proj4.defs['EPSG:2260']) {
+      return projectPointEPSG2260ToWGS84(x_ft, y_ft);
+    }
+  } catch (e) {
+    // ignore and fallback
+  }
+
+  return epsg2260InverseLCCFallback(x_ft, y_ft);
 }
 
 // ----------------------------------------------------------
@@ -284,6 +376,14 @@ async function loadBusSigns() {
 
     const data = await fetchJSON(url);
 
+    // Ensure proj4 is loaded and EPSG:2260 is defined
+    try {
+      await ensureProj4();
+      defineEPSG2260();
+    } catch (e) {
+      console.warn('proj4 not available; falling back to internal reprojection');
+    }
+
     data.forEach(sign => {
       const x = safeNumber(sign.sign_x_coord);
       const y = safeNumber(sign.sign_y_coord);
@@ -295,16 +395,17 @@ async function loadBusSigns() {
 
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
 
-      L.circleMarker([lat, lon], {
-        radius: 4,
-        color: "#d62828",
-        fillColor: "#d62828",
-        fillOpacity: 0.8,
-        weight: 1
-      })
-        .bindTooltip(
-          sign.sign_description || "Bus Sign"
-        )
+      const desc = (sign.sign_description || '').toUpperCase();
+      let icon = defaultSignIcon;
+
+      if (desc.includes('STOP') || desc.includes('BUS STOP') || desc.includes('BUSSTOP')) {
+        icon = stopIcon;
+      } else if (desc.includes('LANE') || desc.includes('BUS LANE') || desc.includes('BUSLANE')) {
+        icon = laneIcon;
+      }
+
+      L.marker([lat, lon], { icon })
+        .bindTooltip(sign.sign_description || "Bus Sign")
         .addTo(busSignsLayer);
     });
 
@@ -346,19 +447,69 @@ async function loadBusLanes() {
       })
       .filter(Boolean);
 
-    L.geoJSON(
-      {
-        type: "FeatureCollection",
-        features
-      },
-      {
-        style: {
-          color: "#f77f00",
-          weight: 3,
-          opacity: 0.8
+    // Attempt to load proj4 and reproject geometries if they appear to be in EPSG:2260
+    try {
+      await ensureProj4();
+      defineEPSG2260();
+
+      const reprojected = features.map(f => {
+        try {
+          const geom = f.geometry;
+          // Only reproject if coordinates look projected
+          let shouldReproject = false;
+
+          function scanCoords(coords) {
+            if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+              if (isLikelyProjectedCoord(coords)) shouldReproject = true;
+              return;
+            }
+            for (const c of coords) scanCoords(c);
+          }
+
+          if (geom && geom.coordinates) scanCoords(geom.coordinates);
+
+          if (shouldReproject) {
+            return {
+              ...f,
+              geometry: reprojectGeometryToWGS84(geom)
+            };
+          }
+
+          return f;
+        } catch (e) {
+          return f;
         }
-      }
-    ).addTo(busLanesLayer);
+      });
+
+      L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features: reprojected
+        },
+        {
+          style: {
+            color: "#f77f00",
+            weight: 3,
+            opacity: 0.8
+          }
+        }
+      ).addTo(busLanesLayer);
+    } catch (e) {
+      // proj4 unavailable; add original geometries (assumed to be GeoJSON WGS84 already)
+      L.geoJSON(
+        {
+          type: "FeatureCollection",
+          features
+        },
+        {
+          style: {
+            color: "#f77f00",
+            weight: 3,
+            opacity: 0.8
+          }
+        }
+      ).addTo(busLanesLayer);
+    }
 
     console.log(
       `Loaded ${features.length} bus lane features`
