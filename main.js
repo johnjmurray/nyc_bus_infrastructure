@@ -27,13 +27,11 @@ const busStopsLayer = L.layerGroup();
 const busRoutesLayer = L.layerGroup();
 const busSignsLayer = L.layerGroup();
 const busLanesLayer = L.layerGroup();
-const userUploadLayer = L.layerGroup();
 
 busStopsLayer.addTo(map);
 busRoutesLayer.addTo(map);
 busSignsLayer.addTo(map);
 busLanesLayer.addTo(map);
-userUploadLayer.addTo(map);
 
 L.control.layers(
   null,
@@ -41,187 +39,12 @@ L.control.layers(
     "Bus Stops": busStopsLayer,
     "Bus Routes": busRoutesLayer,
     "Bus Signs": busSignsLayer,
-    "Bus Lanes": busLanesLayer,
-    "User Uploads": userUploadLayer
+    "Bus Lanes": busLanesLayer
   },
   {
     collapsed: false
   }
 ).addTo(map);
-
-// ----------------------------------------------------------
-// File Upload Control
-// ----------------------------------------------------------
-
-const FileUploadControl = L.Control.extend({
-  onAdd(map) {
-    const container = L.DomUtil.create("div", "leaflet-bar leaflet-control file-upload-control");
-    container.style.cssText = "background-color: white; padding: 10px; border-radius: 5px; cursor: pointer;";
-    
-    const label = L.DomUtil.create("label", "", container);
-    label.innerHTML = "📁 Upload File";
-    label.style.cssText = "display: block; font-weight: bold; margin-bottom: 8px; cursor: pointer;";
-    
-    const input = L.DomUtil.create("input", "", container);
-    input.type = "file";
-    input.accept = ".geojson,.json,.kml";
-    input.style.cssText = "display: block; width: 100%; margin-top: 5px;";
-    
-    const clearBtn = L.DomUtil.create("button", "", container);
-    clearBtn.textContent = "Clear Uploads";
-    clearBtn.style.cssText = "display: block; width: 100%; margin-top: 8px; padding: 5px; cursor: pointer;";
-    clearBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      userUploadLayer.clearLayers();
-      input.value = "";
-      console.log("User uploads cleared");
-    });
-    
-    input.addEventListener("change", (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        handleFileUpload(file);
-      }
-    });
-    
-    L.DomEvent.disableClickPropagation(container);
-    
-    return container;
-  }
-});
-
-new FileUploadControl({ position: "topleft" }).addTo(map);
-
-// ----------------------------------------------------------
-// File Upload Handler
-// ----------------------------------------------------------
-
-async function handleFileUpload(file) {
-  try {
-    const fileName = file.name.toLowerCase();
-    const fileContent = await file.text();
-
-    if (fileName.endsWith(".kml")) {
-      handleKML(fileContent, file.name);
-    } else if (fileName.endsWith(".geojson") || fileName.endsWith(".json")) {
-      handleGeoJSON(fileContent, file.name);
-    } else {
-      console.error("Unsupported file type. Please use .kml, .geojson, or .json");
-      alert("Unsupported file type. Please use .kml, .geojson, or .json");
-    }
-  } catch (err) {
-    console.error("File upload error:", err);
-    alert("Error reading file: " + err.message);
-  }
-}
-
-// ----------------------------------------------------------
-// GeoJSON Handler
-// ----------------------------------------------------------
-
-function handleGeoJSON(content, fileName) {
-  try {
-    const geojson = JSON.parse(content);
-    
-    L.geoJSON(geojson, {
-      style: {
-        color: "#E63946",
-        weight: 2,
-        opacity: 0.7,
-        fillOpacity: 0.5
-      },
-      pointToLayer: (feature, latlng) => {
-        return L.circleMarker(latlng, {
-          radius: 5,
-          color: "#E63946",
-          fillColor: "#E63946",
-          fillOpacity: 0.7,
-          weight: 2
-        });
-      },
-      onEachFeature: (feature, layer) => {
-        if (feature.properties) {
-          let popupContent = `<strong>${fileName}</strong><br>`;
-          for (const [key, value] of Object.entries(feature.properties)) {
-            popupContent += `<strong>${key}:</strong> ${value}<br>`;
-          }
-          layer.bindPopup(popupContent);
-        }
-      }
-    }).addTo(userUploadLayer);
-
-    console.log(`Loaded GeoJSON file: ${fileName}`);
-    fitToInfrastructure();
-  } catch (err) {
-    console.error("GeoJSON parsing error:", err);
-    alert("Invalid GeoJSON file: " + err.message);
-  }
-}
-
-// ----------------------------------------------------------
-// KML Handler (using toGeoJSON library)
-// ----------------------------------------------------------
-
-function handleKML(content, fileName) {
-  try {
-    // Parse KML string to DOM
-    const parser = new DOMParser();
-    const kmlDOM = parser.parseFromString(content, "application/xml");
-
-    if (kmlDOM.parseError && kmlDOM.parseError.errorCode !== 0) {
-      throw new Error("Invalid KML: " + kmlDOM.parseError.reason);
-    }
-
-    // Check if toGeoJSON library is available
-    if (typeof toGeoJSON === "undefined") {
-      console.error("toGeoJSON library not loaded. Please include: https://cdn.jsdelivr.net/npm/@mapbox/togeojson");
-      alert("KML support requires the toGeoJSON library. Please add it to your HTML file.");
-      return;
-    }
-
-    // Convert KML to GeoJSON
-    const geojson = toGeoJSON.kml(kmlDOM);
-
-    if (!geojson.features || geojson.features.length === 0) {
-      console.warn("No features found in KML file");
-      alert("No features found in the KML file");
-      return;
-    }
-
-    L.geoJSON(geojson, {
-      style: {
-        color: "#457B9D",
-        weight: 2,
-        opacity: 0.7,
-        fillOpacity: 0.5
-      },
-      pointToLayer: (feature, latlng) => {
-        return L.circleMarker(latlng, {
-          radius: 5,
-          color: "#457B9D",
-          fillColor: "#457B9D",
-          fillOpacity: 0.7,
-          weight: 2
-        });
-      },
-      onEachFeature: (feature, layer) => {
-        let popupContent = `<strong>${fileName}</strong><br>`;
-        if (feature.properties) {
-          for (const [key, value] of Object.entries(feature.properties)) {
-            popupContent += `<strong>${key}:</strong> ${value}<br>`;
-          }
-        }
-        layer.bindPopup(popupContent);
-      }
-    }).addTo(userUploadLayer);
-
-    console.log(`Loaded KML file: ${fileName}`);
-    fitToInfrastructure();
-  } catch (err) {
-    console.error("KML parsing error:", err);
-    alert("Invalid KML file: " + err.message);
-  }
-}
 
 // ----------------------------------------------------------
 // Utilities
@@ -248,8 +71,7 @@ function fitToInfrastructure() {
   const groups = [
     busRoutesLayer,
     busStopsLayer,
-    busLanesLayer,
-    userUploadLayer
+    busLanesLayer
   ];
 
   let bounds = null;
