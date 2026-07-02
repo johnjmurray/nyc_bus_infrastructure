@@ -36,6 +36,7 @@ jobs:
             mkdir -p "feeds/$feed"
             unzip -j "$z" shapes.txt -d "feeds/$feed" || true
             unzip -j "$z" stops.txt -d "feeds/$feed" || true
+            unzip -j "$z" routes.txt -d "feeds/$feed" || true
           done
 
       - name: Commit and push changes
