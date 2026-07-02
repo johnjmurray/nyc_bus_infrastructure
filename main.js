@@ -75,6 +75,17 @@ async function fetchJSON(url) {
   return resp.json();
 }
 
+async function loadRoutesForFeed(feed) {
+  const text = await fetchText(`feeds/${feed}/routes.txt`);
+  const rows = parseCSV(text);
+  
+  const map = {};
+  rows.forEach(r => {
+    map[r.route_id] = r.route_short_name || r.route_long_name || r.route_id;
+  });
+
+  return map;
+}
 function safeNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -228,23 +239,26 @@ async function loadGTFSFeeds() {
     try {
       console.log(`Loading GTFS feed: ${feed}`);
 
-      const shapesTxt = await fetchText(`feeds/${feed}/shapes.txt`);
-      const stopsTxt = await fetchText(`feeds/${feed}/stops.txt`);
+      const [shapesTxt, stopsTxt, routesMap] = await Promise.all([
+        fetchText(`feeds/${feed}/shapes.txt`),
+        fetchText(`feeds/${feed}/stops.txt`),
+        loadRoutesForFeed(feed)
+      ]);
 
       const shapes = parseCSV(shapesTxt);
       const stops = parseCSV(stopsTxt);
 
       drawStops(stops);
-      drawShapesFromGTFS(shapes);
+      drawShapesFromGTFS(shapes, routesMap);
 
-      console.log(`Loaded ${feed}: ${stops.length} stops, ${shapes.length} shape points`);
+      console.log(`Loaded ${feed}`);
     } catch (err) {
       console.warn(`GTFS feed ${feed} failed:`, err);
     }
   }
 }
-function drawShapesFromGTFS(shapes) {
-  // group by shape_id
+
+function drawShapesFromGTFS(shapes, routesMap) {
   const grouped = {};
 
   shapes.forEach(row => {
@@ -253,9 +267,37 @@ function drawShapesFromGTFS(shapes) {
     grouped[id].push({
       lat: Number(row.shape_pt_lat),
       lon: Number(row.shape_pt_lon),
-      seq: Number(row.shape_pt_sequence)
+      seq: Number(row.shape_pt_sequence),
+      route_id: row.route_id
     });
   });
+
+  Object.keys(grouped).forEach(shape_id => {
+    const pts = grouped[shape_id]
+      .sort((a, b) => a.seq - b.seq)
+      .map(p => [p.lat, p.lon]);
+
+    if (pts.length < 2) return;
+
+    // Look up the route_short_name
+    const route_id = grouped[shape_id][0].route_id;
+    const shortName = routesMap[route_id] || route_id || "?";
+
+    // color by route_short_name
+    const color = routeColor(shortName);
+
+    L.polyline(pts, {
+      color,
+      weight: 3,
+      opacity: 0.8
+    })
+      .bindTooltip(shortName, {
+        sticky: true,         // follows the mouse
+        direction: "auto"     // responsive based on cursor/zoom
+      })
+      .addTo(busRoutesLayer);
+  });
+}
 
   // draw shape lines
   Object.keys(grouped).forEach(shape_id => {
@@ -354,6 +396,13 @@ function drawShapes(shapes) {
   });
 }
 
+function routeColor(routeShortName) {
+  // deterministic color seed
+  const hash = [...routeShortName].reduce((a, c) => a + c.charCodeAt(0), 0);
+  const hue = hash % 360;
+
+  return `hsl(${hue}, 70%, 45%)`;
+}
 // ----------------------------------------------------------
 // NYC DOT Bus Signs
 // ----------------------------------------------------------
