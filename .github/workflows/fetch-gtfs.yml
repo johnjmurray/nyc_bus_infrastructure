@@ -23,9 +23,11 @@ jobs:
         run: |
           # Add or remove feeds as needed
           curl -L -o gtfs/gtfs_bx.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_bx.zip
-          curl -L -o gtfs/gtfs_nyct.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_nyct.zip
-          # Example for more feeds:
-          # curl -L -o gtfs/gtfs_qns.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_qns.zip
+          curl -L -o gtfs/gtfs_b.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_b.zip
+          curl -L -o gtfs/gtfs_m.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_m.zip
+          curl -L -o gtfs/gtfs_q.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_q.zip
+          curl -L -o gtfs/gtfs_si.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_si.zip
+          curl -L -o gtfs/gtfs_busco.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_busco.zip
 
       - name: Extract feeds
         run: |
@@ -37,8 +39,8 @@ jobs:
 
       - name: Commit and push changes
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add feeds
           if git diff --cached --quiet; then
             echo "No changes to commit."
