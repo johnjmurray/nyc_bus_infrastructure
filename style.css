@@ -12,3 +12,12 @@ html, body {
   font-size: 13px;
   font-weight: 500;
 }
+
+.bus-lane-tooltip {
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid #d33;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
