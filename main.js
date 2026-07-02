@@ -287,7 +287,7 @@ function drawShapesFromGTFS(shapes, routesMap) {
 
     const route_id = grouped[shape_id][0].route_id;
     const routeInfo = routesMap[route_id] || {};
-    const shortName = routeInfo.short || route_id;
+    const shortName = routeInfo.short || route_id || "?";
 
     // Use GTFS color when available; otherwise fallback
     const color = routeInfo.color || routeColor(shortName);
