@@ -492,19 +492,41 @@ async function loadBusLanes() {
       })
       .filter(Boolean);
 
-    L.geoJSON(
-      {
-        type: "FeatureCollection",
-        features
+
+  L.geoJSON(
+    {
+      type: "FeatureCollection",
+      features
+    },
+    {
+      style: {
+        color: "red",
+        weight: 9,
+        opacity: 0.5
       },
-      {
-        style: {
-          color: "#f77f00",
-          weight: 3,
-          opacity: 0.8
+      onEachFeature: function (feature, layer) {
+        const p = feature.properties;
+  
+        // Build label text
+        const label =
+          `${p.Days || ""} ` +
+          `${p.Hours || ""} ` +
+          `${p.Lane_Type || ""} ` +
+          `${p.Lane_Width || ""}`.trim();
+  
+        // Attach a responsive tooltip
+        if (label !== "") {
+          layer.bindTooltip(label, {
+            sticky: true,
+            direction: "auto",
+            opacity: 0.9,
+            className: "bus-lane-tooltip"
+          });
         }
       }
-    ).addTo(busLanesLayer);
+    }
+  ).addTo(busLanesLayer);
+
 
     console.log(
       `Loaded ${features.length} bus lane features`
