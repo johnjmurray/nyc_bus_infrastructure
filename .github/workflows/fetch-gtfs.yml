@@ -1,0 +1,48 @@
+name: Fetch MTA GTFS Feeds
+
+on:
+  workflow_dispatch:    # allows manual triggering
+  schedule:
+    - cron: "0 */6 * * *"   # runs every 6 hours (adjust as needed)
+
+jobs:
+  update-gtfs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Create working directory
+        run: mkdir -p gtfs
+
+      - name: Download GTFS feeds
+        run: |
+          # Add or remove feeds as needed
+          curl -L -o gtfs/gtfs_bx.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_bx.zip
+          curl -L -o gtfs/gtfs_nyct.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_nyct.zip
+          # Example for more feeds:
+          # curl -L -o gtfs/gtfs_qns.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_qns.zip
+
+      - name: Extract feeds
+        run: |
+          for z in gtfs/*.zip; do
+            folder=$(basename "$z" .zip)
+            mkdir -p "feeds/$folder"
+            unzip -o "$z" -d "feeds/$folder"
+          done
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add feeds
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Updated GTFS feeds"
+            git push
+          fi
