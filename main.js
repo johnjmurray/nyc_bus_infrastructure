@@ -316,7 +316,7 @@ function drawShapesFromGTFS(shapes, routesMap) {
       .bindTooltip(shape_id)
       .addTo(busRoutesLayer);
   });
-}
+
 async function loadCachedGTFS() {
   try {
     const [stops, shapes] = await Promise.all([
