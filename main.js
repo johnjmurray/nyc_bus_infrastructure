@@ -78,14 +78,19 @@ async function fetchJSON(url) {
 async function loadRoutesForFeed(feed) {
   const text = await fetchText(`feeds/${feed}/routes.txt`);
   const rows = parseCSV(text);
-  
+
   const map = {};
   rows.forEach(r => {
-    map[r.route_id] = r.route_short_name || r.route_long_name || r.route_id;
+    map[r.route_id] = {
+      short: r.route_short_name || r.route_long_name || r.route_id,
+      color: r.route_color ? `#${r.route_color}` : null,
+      textColor: r.route_text_color ? `#${r.route_text_color}` : "#000000"
+    };
   });
 
   return map;
 }
+
 function safeNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -259,7 +264,6 @@ async function loadGTFSFeeds() {
 }
 
 function drawShapesFromGTFS(shapes, routesMap) {
-  // Group GTFS rows by shape_id
   const grouped = {};
 
   shapes.forEach(row => {
@@ -273,28 +277,31 @@ function drawShapesFromGTFS(shapes, routesMap) {
     });
   });
 
-  // Render each shape
   Object.keys(grouped).forEach(shape_id => {
-    const points = grouped[shape_id]
+    const pts = grouped[shape_id]
       .sort((a, b) => a.seq - b.seq)
       .map(p => [p.lat, p.lon])
       .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
 
-    if (points.length < 2) return;
+    if (pts.length < 2) return;
 
     const route_id = grouped[shape_id][0].route_id;
-    const shortName = routesMap[route_id] || route_id || "?";
+    const routeInfo = routesMap[route_id] || {};
+    const shortName = routeInfo.short || route_id;
 
-    const color = routeColor(shortName);
+    // Use GTFS color when available; otherwise fallback
+    const color = routeInfo.color || routeColor(shortName);
 
-    L.polyline(points, {
+    L.polyline(pts, {
       color,
       weight: 3,
-      opacity: 0.8
+      opacity: 0.85
     })
       .bindTooltip(shortName, {
         sticky: true,
-        direction: "auto"
+        direction: "auto",
+        className: "route-tooltip",
+        opacity: 0.95
       })
       .addTo(busRoutesLayer);
   });
