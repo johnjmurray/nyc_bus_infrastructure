@@ -19,6 +19,7 @@ L.tileLayer(
   }
 ).addTo(map);
 
+
 // ----------------------------------------------------------
 // Layers
 // ----------------------------------------------------------
@@ -41,6 +42,20 @@ const GTFS_FEEDS = [
 ];
 
 
+const routeColorCache = {};
+
+function randomRouteColor(routeId) {
+  // If already assigned, return it
+  if (routeColorCache[routeId]) return routeColorCache[routeId];
+
+  // Generate a random but visually pleasant color
+  const hue = Math.floor(Math.random() * 360);
+  const color = `hsl(${hue}, 70%, 45%)`;
+
+  routeColorCache[routeId] = color;
+  return color;
+}
+
 busStopsLayer.addTo(map);
 busRoutesLayer.addTo(map);
 busSignsLayer.addTo(map);
@@ -62,6 +77,7 @@ L.control.layers(
 // ----------------------------------------------------------
 // Utilities
 // ----------------------------------------------------------
+
 
 async function fetchJSON(url) {
   const resp = await fetch(url, {
@@ -263,34 +279,34 @@ async function loadGTFSFeeds() {
   }
 }
 
-function drawShapesFromGTFS(shapes, routesMap) {
+function drawShapesFromGTFS(shapes, routesMap, shapeRouteMap) {
   const grouped = {};
 
   shapes.forEach(row => {
-    const id = row.shape_id;
-    if (!grouped[id]) grouped[id] = [];
-    grouped[id].push({
+    const shapeId = row.shape_id;
+    if (!grouped[shapeId]) grouped[shapeId] = [];
+    grouped[shapeId].push({
       lat: Number(row.shape_pt_lat),
       lon: Number(row.shape_pt_lon),
-      seq: Number(row.shape_pt_sequence),
-      route_id: row.route_id
+      seq: Number(row.shape_pt_sequence)
     });
   });
 
-  Object.keys(grouped).forEach(shape_id => {
-    const pts = grouped[shape_id]
+  Object.keys(grouped).forEach(shapeId => {
+    const pts = grouped[shapeId]
       .sort((a, b) => a.seq - b.seq)
-      .map(p => [p.lat, p.lon])
-      .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
+      .map(p => [p.lat, p.lon]);
 
     if (pts.length < 2) return;
 
-    const route_id = grouped[shape_id][0].route_id;
-    const routeInfo = routesMap[route_id] || {};
-    const shortName = routeInfo.short || route_id || "?";
+    // route_id from shapeRouteMap (from trips.txt)
+    const route_id = shapeRouteMap[shapeId] || shapeId;
 
-    // Use GTFS color when available; otherwise fallback
-    const color = routeInfo.color || routeColor(shortName);
+    // route short name from routes.txt (optional)
+    const shortName = routesMap[route_id]?.short || route_id;
+
+    // 🎨 Random color per route
+    const color = randomRouteColor(route_id);
 
     L.polyline(pts, {
       color,
@@ -299,14 +315,11 @@ function drawShapesFromGTFS(shapes, routesMap) {
     })
       .bindTooltip(shortName, {
         sticky: true,
-        direction: "auto",
-        className: "route-tooltip",
-        opacity: 0.95
+        direction: "auto"
       })
       .addTo(busRoutesLayer);
   });
 }
-
 
 async function loadCachedGTFS() {
   try {
