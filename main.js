@@ -259,6 +259,7 @@ async function loadGTFSFeeds() {
 }
 
 function drawShapesFromGTFS(shapes, routesMap) {
+  // Group GTFS rows by shape_id
   const grouped = {};
 
   shapes.forEach(row => {
@@ -272,50 +273,33 @@ function drawShapesFromGTFS(shapes, routesMap) {
     });
   });
 
+  // Render each shape
   Object.keys(grouped).forEach(shape_id => {
-    const pts = grouped[shape_id]
+    const points = grouped[shape_id]
       .sort((a, b) => a.seq - b.seq)
-      .map(p => [p.lat, p.lon]);
+      .map(p => [p.lat, p.lon])
+      .filter(([lat, lon]) => Number.isFinite(lat) && Number.isFinite(lon));
 
-    if (pts.length < 2) return;
+    if (points.length < 2) return;
 
-    // Look up the route_short_name
     const route_id = grouped[shape_id][0].route_id;
     const shortName = routesMap[route_id] || route_id || "?";
 
-    // color by route_short_name
     const color = routeColor(shortName);
 
-    L.polyline(pts, {
+    L.polyline(points, {
       color,
       weight: 3,
       opacity: 0.8
     })
       .bindTooltip(shortName, {
-        sticky: true,         // follows the mouse
-        direction: "auto"     // responsive based on cursor/zoom
+        sticky: true,
+        direction: "auto"
       })
       .addTo(busRoutesLayer);
   });
 }
 
-  // draw shape lines
-  Object.keys(grouped).forEach(shape_id => {
-    const pts = grouped[shape_id]
-      .sort((a, b) => a.seq - b.seq)
-      .map(p => [p.lat, p.lon])
-      .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
-
-    if (pts.length < 2) return;
-
-    L.polyline(pts, {
-      color: "#6f42c1",
-      weight: 2,
-      opacity: 0.6
-    })
-      .bindTooltip(shape_id)
-      .addTo(busRoutesLayer);
-  });
 
 async function loadCachedGTFS() {
   try {
