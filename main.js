@@ -28,6 +28,19 @@ const busRoutesLayer = L.layerGroup();
 const busSignsLayer = L.layerGroup();
 const busLanesLayer = L.layerGroup();
 
+
+
+// List GTFS feed folders manually (add more as needed)
+const GTFS_FEEDS = [
+  "gtfs_bx",
+  "gtfs_q",
+  "gtfs_m",
+  "gtfs_si",
+  "gtfs_b",
+  "gtfs_busco"
+];
+
+
 busStopsLayer.addTo(map);
 busRoutesLayer.addTo(map);
 busSignsLayer.addTo(map);
@@ -191,7 +204,77 @@ function epsg2260ToWGS84(x_ft, y_ft) {
 // ----------------------------------------------------------
 // Cached GTFS Data
 // ----------------------------------------------------------
+async function fetchText(url) {
+  const resp = await fetch(url, { cache: "no-store" });
+  if (!resp.ok) throw new Error(`${url}: ${resp.status}`);
+  return resp.text();
+}
 
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
+  const headers = lines[0].split(",");
+  return lines.slice(1).map(line => {
+    const cols = line.split(",");
+    const obj = {};
+    headers.forEach((h, i) => {
+      obj[h] = cols[i];
+    });
+    return obj;
+  });
+}
+
+async function loadGTFSFeeds() {
+  for (const feed of GTFS_FEEDS) {
+    try {
+      console.log(`Loading GTFS feed: ${feed}`);
+
+      const shapesTxt = await fetchText(`feeds/${feed}/shapes.txt`);
+      const stopsTxt = await fetchText(`feeds/${feed}/stops.txt`);
+
+      const shapes = parseCSV(shapesTxt);
+      const stops = parseCSV(stopsTxt);
+
+      drawStops(stops);
+      drawShapesFromGTFS(shapes);
+
+      console.log(`Loaded ${feed}: ${stops.length} stops, ${shapes.length} shape points`);
+    } catch (err) {
+      console.warn(`GTFS feed ${feed} failed:`, err);
+    }
+  }
+}
+function drawShapesFromGTFS(shapes) {
+  // group by shape_id
+  const grouped = {};
+
+  shapes.forEach(row => {
+    const id = row.shape_id;
+    if (!grouped[id]) grouped[id] = [];
+    grouped[id].push({
+      lat: Number(row.shape_pt_lat),
+      lon: Number(row.shape_pt_lon),
+      seq: Number(row.shape_pt_sequence)
+    });
+  });
+
+  // draw shape lines
+  Object.keys(grouped).forEach(shape_id => {
+    const pts = grouped[shape_id]
+      .sort((a, b) => a.seq - b.seq)
+      .map(p => [p.lat, p.lon])
+      .filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+
+    if (pts.length < 2) return;
+
+    L.polyline(pts, {
+      color: "#6f42c1",
+      weight: 2,
+      opacity: 0.6
+    })
+      .bindTooltip(shape_id)
+      .addTo(busRoutesLayer);
+  });
+}
 async function loadCachedGTFS() {
   try {
     const [stops, shapes] = await Promise.all([
@@ -390,7 +473,7 @@ async function init() {
   console.log("Loading bus infrastructure layers...");
 
   const results = await Promise.allSettled([
-    loadCachedGTFS(),
+    loadGTFSFeeds(),
     loadBusSigns(),
     loadBusLanes()
   ]);
