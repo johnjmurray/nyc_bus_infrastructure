@@ -29,7 +29,6 @@ jobs:
           curl -L -o gtfs/gtfs_si.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_si.zip
           curl -L -o gtfs/gtfs_busco.zip https://rrgtfsfeeds.s3.amazonaws.com/gtfs_busco.zip
 
-
       - name: Extract ONLY shapes.txt and stops.txt
         run: |
           for z in gtfs/*.zip; do
@@ -38,64 +37,6 @@ jobs:
             unzip -j "$z" shapes.txt -d "feeds/$feed" || true
             unzip -j "$z" stops.txt -d "feeds/$feed" || true
           done
-
-      - name: Convert GTFS to GeoJSON
-        run: |
-          python3 << 'EOF'
-            import pandas as pd
-          from shapely.geometry import LineString, Point
-          import json
-          import os
-          
-          os.makedirs("geojson", exist_ok=True)
-          
-          for feed in os.listdir("feeds"):
-              feed_path = os.path.join("feeds", feed)
-          
-              shapes_file = os.path.join(feed_path, "shapes.txt")
-              stops_file = os.path.join(feed_path, "stops.txt")
-          
-              # Process shapes.txt → LineString GeoJSON
-              if os.path.exists(shapes_file):
-                  shapes = pd.read_csv(shapes_file)
-                  features = []
-          
-                  for shape_id, group in shapes.groupby("shape_id"):
-                      coords = list(zip(group["shape_pt_lon"], group["shape_pt_lat"]))
-                      geom = LineString(coords)
-                      features.append({
-                          "type": "Feature",
-                          "geometry": json.loads(json.dumps(geom.__geo_interface__)),
-                          "properties": {"shape_id": shape_id}
-                      })
-          
-                  geojson_obj = {"type": "FeatureCollection", "features": features}
-          
-                  with open(f"geojson/{feed}_shapes.geojson", "w") as f:
-                      json.dump(geojson_obj, f)
-          
-              # Process stops.txt → Point GeoJSON
-              if os.path.exists(stops_file):
-                  stops = pd.read_csv(stops_file)
-                  features = []
-          
-                  for _, row in stops.iterrows():
-                      geom = Point(row["stop_lon"], row["stop_lat"])
-                      features.append({
-                          "type": "Feature",
-                          "geometry": json.loads(json.dumps(geom.__geo_interface__)),
-                          "properties": {
-                              "stop_id": row.get("stop_id"),
-                              "stop_name": row.get("stop_name")
-                          }
-                      })
-          
-                  geojson_obj = {"type": "FeatureCollection", "features": features}
-          
-                  with open(f"geojson/{feed}_stops.geojson", "w") as f:
-                      json.dump(geojson_obj, f)
-          EOF
-          
 
       - name: Commit and push changes
         run: |
