@@ -411,6 +411,7 @@ function routeColor(routeShortName) {
 // NYC DOT Bus Signs
 // ----------------------------------------------------------
 
+/*
 async function loadBusSigns() {
   try {
     const url =
@@ -463,7 +464,57 @@ async function loadBusSigns() {
     console.error("Bus signs load failed:", err);
   }
 }
+*/
 
+// ----------------------------------------------------------
+// Load Bus Signs from GitHub-generated CSV
+// ----------------------------------------------------------
+
+async function loadBusSigns() {
+  try {
+    const csvText = await fetchText("data/sign_output.csv");
+    const rows = parseCSV(csvText);
+
+    rows.forEach(sign => {
+      const lat = safeNumber(sign.latitude);
+      const lon = safeNumber(sign.longitude);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+      const desc = (sign.sign_description || "").toUpperCase();
+
+      // Color scheme (same as before)
+      const signColor = desc.includes("LANE")
+        ? "#4B0082"
+        : desc.includes("ONLY")
+        ? "#4B0082"
+        : desc.includes("STOP")
+        ? "#66CCFF"
+        : "#6c757d";
+
+      const tooltipText =
+        `${sign.sign_description || "Sign"}<br>` +
+        `Order #: ${sign.order_number || "N/A"}<br>` +
+        (sign.order_completed_on_date
+          ? `Completed: ${sign.order_completed_on_date}`
+          : "");
+
+      L.circleMarker([lat, lon], {
+        radius: 4,
+        color: signColor,
+        fillColor: signColor,
+        fillOpacity: 0.8,
+        weight: 1
+      })
+        .bindTooltip(tooltipText)
+        .addTo(busSignsLayer);
+    });
+
+    console.log(`Loaded ${rows.length} bus signs from CSV`);
+  } catch (err) {
+    console.error("CSV bus signs load failed:", err);
+  }
+}
 // ----------------------------------------------------------
 // NYC DOT Bus Lanes
 // ----------------------------------------------------------
