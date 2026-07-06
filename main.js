@@ -19,12 +19,6 @@ L.tileLayer(
   }
 ).addTo(map);
 
-proj4.defs(
-  "EPSG:2260",
-  "+proj=lcc +lat_1=40.66666666666666 +lat_2=41.03333333333333 " +
-  "+lat_0=40.16666666666666 +lon_0=-74 +x_0=984250 +y_0=0 " +
-  "+datum=NAD83 +units=us-ft +no_defs"
-);
 
 // ----------------------------------------------------------
 // Layers
@@ -152,10 +146,90 @@ function fitToInfrastructure() {
 // Coordinate Conversion
 // ----------------------------------------------------------
 
-
+/**
+ * Convert from EPSG:2260 (NAD_1983_StatePlane_New_York_Long_Island_FIPS_3104_Feet)
+ * to WGS84 (lat/lon)
+ *
+ * Projection: Lambert Conformal Conic (2SP)
+ * Parameters (EPSG:2260):
+ *  - Latitude of 1st standard parallel: 40.66666666666666
+ *  - Latitude of 2nd standard parallel: 41.03333333333333
+ *  - Latitude of origin: 40.16666666666666
+ *  - Central meridian: -74.0
+ *  - False easting: 984250.0 (US survey feet)
+ *  - False northing: 0.0 (US survey feet)
+ *
+ * This implementation performs the inverse Lambert Conformal Conic (2SP) projection
+ * on the NAD83 ellipsoid and converts US survey feet to meters.
+ * It's a direct implementation of the Snyder formulas with an iterative solution
+ * to recover latitude from the isometric latitude (t).
+ */
 function epsg2260ToWGS84(x_ft, y_ft) {
-  // proj4 returns [lon, lat]
-  const [lon, lat] = proj4("EPSG:2260", "WGS84", [x_ft, y_ft]);
+  // EPSG:2260 LCC parameters
+  const lat1 = 40.66666666666666 * Math.PI / 180; // first standard parallel (radians)
+  const lat2 = 41.03333333333333 * Math.PI / 180; // second standard parallel (radians)
+  const lat0 = 40.16666666666666 * Math.PI / 180; // latitude of origin (radians)
+  const lon0 = -74.0 * Math.PI / 180; // central meridian (radians)
+
+  // False easting / northing in US survey feet (EPSG uses US survey feet)
+  const x0_ft = 984250.0;
+  const y0_ft = 0.0;
+
+  // Convert US survey feet to meters
+  const usFtToMeters = 0.3048006096012192; // exact conversion for US survey foot
+
+  const x = (x_ft - x0_ft) * usFtToMeters;
+  const y = (y_ft - y0_ft) * usFtToMeters;
+
+  // NAD83 / GRS80 ellipsoid constants
+  const a = 6378137.0; // semi-major axis (meters)
+  const f = 1 / 298.257222101; // flattening for GRS80
+  const e = Math.sqrt(2 * f - f * f); // eccentricity
+
+  function m(phi) {
+    return Math.cos(phi) / Math.sqrt(1 - (e * e) * Math.sin(phi) * Math.sin(phi));
+  }
+
+  function t(phi) {
+    const sinp = Math.sin(phi);
+    const part = (1 - e * sinp) / (1 + e * sinp);
+    return Math.tan(Math.PI / 4 - phi / 2) / Math.pow(part, e / 2);
+  }
+
+  const m1 = m(lat1);
+  const m2 = m(lat2);
+  const t1 = t(lat1);
+  const t2 = t(lat2);
+  const t0 = t(lat0);
+
+  // n, F, rho0 as per Snyder
+  const n = Math.log(m1 / m2) / Math.log(t1 / t2);
+  const F = m1 / (n * Math.pow(t1, n));
+  const rho0 = a * F * Math.pow(t0, n);
+
+  // compute rho and theta from x,y (note typical forward uses x = rho*sin(n*(lambda-lambda0)))
+  const rho = Math.sqrt(x * x + Math.pow(rho0 - y, 2));
+  const theta = Math.atan2(x, rho0 - y);
+
+  // compute t from rho
+  const tVal = Math.pow(rho / (a * F), 1 / n);
+
+  // iterative solution to recover phi from t
+  let phi = Math.PI / 2 - 2 * Math.atan(tVal); // initial guess
+
+  for (let i = 0; i < 15; i++) {
+    const esin = e * Math.sin(phi);
+    const phiNext = Math.PI / 2 - 2 * Math.atan(tVal * Math.pow((1 - esin) / (1 + esin), e / 2));
+    if (Math.abs(phiNext - phi) < 1e-12) {
+      phi = phiNext;
+      break;
+    }
+    phi = phiNext;
+  }
+
+  const lat = phi * 180 / Math.PI;
+  const lon = (lon0 + theta / n) * 180 / Math.PI;
+
   return [lat, lon];
 }
 
@@ -337,12 +411,11 @@ function routeColor(routeShortName) {
 // NYC DOT Bus Signs
 // ----------------------------------------------------------
 
-/*
 async function loadBusSigns() {
   try {
     const url =
       "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
-      "?$select=sign_x_coord,sign_y_coord,sign_description,date_trunc_ymd(order_completed_on_date) as order_completed_on_date" +
+      "?$select=sign_x_coord,sign_y_coord,sign_description,date_trunc_ymd(order_completed_on_date)%20as%20order_completed_on_date"
       "&$where=(upper(sign_description)%20like%20'%25BUS%20STOP%25'%20OR%20upper(sign_description)%20like%20'%25BUS%20LANE%25'%20OR%20upper(sign_description)%20like%20'%25BUSES%20ONLY%25')%20AND%20record_type%20=%20'Current'" + 
       "&$limit=50000";
 
@@ -390,141 +463,6 @@ async function loadBusSigns() {
     console.error("Bus signs load failed:", err);
   }
 }
-
-*/
-
-// ----------------------------------------------------------
-// Canvas text marker helper
-// ----------------------------------------------------------
-function canvasTextMarker(latlng, text, color, size = 18) {
-  const marker = L.circleMarker(latlng, {
-    radius: 10,
-    stroke: false,
-    fillOpacity: 0,
-    renderer: L.canvas(),
-  });
-
-  marker.on("add", function () {
-    const renderer = this._renderer;
-    if (!renderer) return;
-
-    const origUpdate = renderer._updateCircle;
-    renderer._updateCircle = function(layer) {
-      origUpdate.call(this, layer);
-
-      if (layer === marker) {
-        const ctx = this._ctx;
-        const p = layer._point;
-        ctx.save();
-        ctx.fillStyle = color;
-        ctx.font = size + "px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(text, p.x, p.y);
-        ctx.restore();
-      }
-    };
-  });
-
-  return marker;
-}
-
-
-// ----------------------------------------------------------
-// Rewritten loadBusSigns() using Canvas icons
-// ----------------------------------------------------------
-
-async function loadBusSigns() {
-  try {
-    const url =
-      "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
-      "?$select=sign_x_coord,sign_y_coord,sign_description,date_trunc_ymd(order_completed_on_date)%20as%20order_completed_on_date" +
-      "&$where=(upper(sign_description)%20like%20'%25BUS%20STOP%25'%20OR%20upper(sign_description)%20like%20'%25BUS%20LANE%25'%20OR%20upper(sign_description)%20like%20'%25BUSES%20ONLY%25')%20AND%20record_type%20=%20'Current'" + 
-      "&$limit=50000";
-
-    const data = await fetchJSON(url);
-
-    data.forEach(sign => {
-      const x = safeNumber(sign.sign_x_coord);
-      const y = safeNumber(sign.sign_y_coord);
-
-      if (x === null || y === null) return;
-
-      const [lat, lon] = epsg2260ToWGS84(x, y);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-
-      const desc = (sign.sign_description || "").toUpperCase();
-
-      // ------------------------------------------------------
-      // 1. Determine arrow icon + color (Canvas, not DOM)
-      // ------------------------------------------------------
-      let iconChar = null;
-      let iconColor = null;
-
-      if (desc.includes("SINGLE ARROW")) {
-        iconChar = "\u2192";    // →
-        iconColor = "darkblue";
-
-      } else if (desc.match(/<-+>/)) {
-        iconChar = "\u2194";    // ↔
-        iconColor = "darkblue";
-
-      } else if ((desc.includes("LANE") || desc.includes("ONLY")) &&
-                 desc.includes("6 O'CLOCK ARROW")) {
-        iconChar = "\u21D3";    // ⇓
-        iconColor = "#B22222";
-
-      } else if ((desc.includes("LANE") || desc.includes("ONLY")) &&
-                 desc.includes("7 O'CLOCK ARROW")) {
-        iconChar = "\u21D9";    // ⇙
-        iconColor = "#B22222";
-      }
-
-      // ------------------------------------------------------
-      // 2. Determine fallback circle marker color
-      // ------------------------------------------------------
-      const signColor = desc.includes("LANE")
-        ? "#4B0082"
-        : desc.includes("ONLY")
-        ? "#4B0082"
-        : desc.includes("STOP")
-        ? "#66CCFF"
-        : "#6c757d";
-
-      const tooltipText = sign.order_completed_on_date
-        ? `${sign.sign_description}<br>Completed: ${sign.order_completed_on_date}`
-        : sign.sign_description || "Bus Sign";
-
-      // ------------------------------------------------------
-      // 3. Draw with Canvas instead of DOM
-      // ------------------------------------------------------
-      let marker;
-
-      if (iconChar) {
-        // Fast Canvas text icon marker
-        marker = canvasTextMarker([lat, lon], iconChar, iconColor, 18);
-      } else {
-        // Lightweight Canvas circle
-        marker = L.circleMarker([lat, lon], {
-          radius: 4,
-          color: signColor,
-          fillColor: signColor,
-          fillOpacity: 0.8,
-          weight: 1,
-          renderer: L.canvas()
-        });
-      }
-
-      marker.bindTooltip(tooltipText);
-      marker.addTo(busSignsLayer);
-    });
-
-    console.log(`Loaded ${data.length} bus signs`);
-  } catch (err) {
-    console.error("Bus signs load failed:", err);
-  }
-}
-
 
 // ----------------------------------------------------------
 // NYC DOT Bus Lanes
