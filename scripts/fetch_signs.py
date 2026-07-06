@@ -115,7 +115,7 @@ fieldnames = [
     "sign_notes"
 ]
 
-output_file = "sign_output.csv"
+output_file = "data/sign_output.csv"
 
 with open(output_file, "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames)
