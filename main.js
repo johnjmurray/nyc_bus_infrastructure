@@ -411,11 +411,12 @@ function routeColor(routeShortName) {
 // NYC DOT Bus Signs
 // ----------------------------------------------------------
 
+/*
 async function loadBusSigns() {
   try {
     const url =
       "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
-      "?$select=sign_x_coord,sign_y_coord,sign_description,order_completed_on_date" +
+      "?$select=sign_x_coord,sign_y_coord,sign_description,date_trunc_ymd(order_completed_on_date) as order_completed_on_date" +
       "&$where=(upper(sign_description)%20like%20'%25BUS%20STOP%25'%20OR%20upper(sign_description)%20like%20'%25BUS%20LANE%25'%20OR%20upper(sign_description)%20like%20'%25BUSES%20ONLY%25')%20AND%20record_type%20=%20'Current'" + 
       "&$limit=50000";
 
@@ -463,6 +464,103 @@ async function loadBusSigns() {
     console.error("Bus signs load failed:", err);
   }
 }
+
+*/
+
+async function loadBusSigns() {
+  try {
+    const url =
+      "https://data.cityofnewyork.us/resource/qt6m-xctn.json" +
+      "?$select=sign_x_coord,sign_y_coord,sign_description,order_completed_on_date" +
+      "&$where=(upper(sign_description) like '%BUS STOP%' OR upper(sign_description) like '%BUS LANE%' OR upper(sign_description) like '%BUSES ONLY%') AND record_type = 'Current'" +
+      "&$limit=50000";
+
+    const data = await fetchJSON(url);
+
+    data.forEach(sign => {
+      const x = safeNumber(sign.sign_x_coord);
+      const y = safeNumber(sign.sign_y_coord);
+
+      if (x === null || y === null) return;
+
+      const [lat, lon] = epsg2260ToWGS84(x, y);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+
+      const desc = (sign.sign_description || "").toUpperCase();
+
+      // ------------------------------
+      // 1. Determine icon + icon color
+      // ------------------------------
+      let iconChar = null;
+      let iconColor = null;
+
+      if (desc.includes("SINGLE ARROW")) {
+        iconChar = "\u2192";           // →
+        iconColor = "darkblue";
+
+      } else if (desc.match(/<-+>/)) {
+        iconChar = "\u2194";           // ↔
+        iconColor = "darkblue";
+
+      } else if ((desc.includes("LANE") || desc.includes("ONLY")) &&
+                 desc.includes("6 O'CLOCK ARROW")) {
+        iconChar = "\u21D3";           // ⇓
+        iconColor = "#B22222";         // brick red
+
+      } else if ((desc.includes("LANE") || desc.includes("ONLY")) &&
+                 desc.includes("7 O'CLOCK ARROW")) {
+        iconChar = "\u21D9";           // ⇙
+        iconColor = "#B22222";         // brick red
+      }
+
+      // ----------------------------------------------
+      // 2. Existing color logic for circle markers
+      // ----------------------------------------------
+      const signColor = desc.includes("LANE")
+        ? "#4B0082"
+        : desc.includes("ONLY")
+        ? "#4B0082"
+        : desc.includes("STOP")
+        ? "#66CCFF"
+        : "#6c757d";
+
+      const tooltipText = sign.order_completed_on_date
+        ? `${sign.sign_description}<br>Completed: ${sign.order_completed_on_date}`
+        : sign.sign_description || "Bus Sign";
+
+      // ----------------------------------------------
+      // 3. If an icon was matched, use an L.divIcon
+      // ----------------------------------------------
+      if (iconChar) {
+        const divIcon = L.divIcon({
+          className: "",
+          html: `<span style="font-size:18px;color:${iconColor};">${iconChar}</span>`
+        });
+
+        L.marker([lat, lon], { icon: divIcon })
+          .bindTooltip(tooltipText)
+          .addTo(busSignsLayer);
+
+      } else {
+        // Fallback: original circle marker
+        L.circleMarker([lat, lon], {
+          radius: 4,
+          color: signColor,
+          fillColor: signColor,
+          fillOpacity: 0.8,
+          weight: 1
+        })
+          .bindTooltip(tooltipText)
+          .addTo(busSignsLayer);
+      }
+    });
+
+    console.log(`Loaded ${data.length} bus signs`);
+  } catch (err) {
+    console.error("Bus signs load failed:", err);
+  }
+}
+
 
 // ----------------------------------------------------------
 // NYC DOT Bus Lanes
