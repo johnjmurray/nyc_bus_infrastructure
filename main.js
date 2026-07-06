@@ -19,6 +19,12 @@ L.tileLayer(
   }
 ).addTo(map);
 
+proj4.defs(
+  "EPSG:2260",
+  "+proj=lcc +lat_1=40.66666666666666 +lat_2=41.03333333333333 " +
+  "+lat_0=40.16666666666666 +lon_0=-74 +x_0=984250 +y_0=0 " +
+  "+datum=NAD83 +units=us-ft +no_defs"
+);
 
 // ----------------------------------------------------------
 // Layers
@@ -146,90 +152,10 @@ function fitToInfrastructure() {
 // Coordinate Conversion
 // ----------------------------------------------------------
 
-/**
- * Convert from EPSG:2260 (NAD_1983_StatePlane_New_York_Long_Island_FIPS_3104_Feet)
- * to WGS84 (lat/lon)
- *
- * Projection: Lambert Conformal Conic (2SP)
- * Parameters (EPSG:2260):
- *  - Latitude of 1st standard parallel: 40.66666666666666
- *  - Latitude of 2nd standard parallel: 41.03333333333333
- *  - Latitude of origin: 40.16666666666666
- *  - Central meridian: -74.0
- *  - False easting: 984250.0 (US survey feet)
- *  - False northing: 0.0 (US survey feet)
- *
- * This implementation performs the inverse Lambert Conformal Conic (2SP) projection
- * on the NAD83 ellipsoid and converts US survey feet to meters.
- * It's a direct implementation of the Snyder formulas with an iterative solution
- * to recover latitude from the isometric latitude (t).
- */
+
 function epsg2260ToWGS84(x_ft, y_ft) {
-  // EPSG:2260 LCC parameters
-  const lat1 = 40.66666666666666 * Math.PI / 180; // first standard parallel (radians)
-  const lat2 = 41.03333333333333 * Math.PI / 180; // second standard parallel (radians)
-  const lat0 = 40.16666666666666 * Math.PI / 180; // latitude of origin (radians)
-  const lon0 = -74.0 * Math.PI / 180; // central meridian (radians)
-
-  // False easting / northing in US survey feet (EPSG uses US survey feet)
-  const x0_ft = 984250.0;
-  const y0_ft = 0.0;
-
-  // Convert US survey feet to meters
-  const usFtToMeters = 0.3048006096012192; // exact conversion for US survey foot
-
-  const x = (x_ft - x0_ft) * usFtToMeters;
-  const y = (y_ft - y0_ft) * usFtToMeters;
-
-  // NAD83 / GRS80 ellipsoid constants
-  const a = 6378137.0; // semi-major axis (meters)
-  const f = 1 / 298.257222101; // flattening for GRS80
-  const e = Math.sqrt(2 * f - f * f); // eccentricity
-
-  function m(phi) {
-    return Math.cos(phi) / Math.sqrt(1 - (e * e) * Math.sin(phi) * Math.sin(phi));
-  }
-
-  function t(phi) {
-    const sinp = Math.sin(phi);
-    const part = (1 - e * sinp) / (1 + e * sinp);
-    return Math.tan(Math.PI / 4 - phi / 2) / Math.pow(part, e / 2);
-  }
-
-  const m1 = m(lat1);
-  const m2 = m(lat2);
-  const t1 = t(lat1);
-  const t2 = t(lat2);
-  const t0 = t(lat0);
-
-  // n, F, rho0 as per Snyder
-  const n = Math.log(m1 / m2) / Math.log(t1 / t2);
-  const F = m1 / (n * Math.pow(t1, n));
-  const rho0 = a * F * Math.pow(t0, n);
-
-  // compute rho and theta from x,y (note typical forward uses x = rho*sin(n*(lambda-lambda0)))
-  const rho = Math.sqrt(x * x + Math.pow(rho0 - y, 2));
-  const theta = Math.atan2(x, rho0 - y);
-
-  // compute t from rho
-  const tVal = Math.pow(rho / (a * F), 1 / n);
-
-  // iterative solution to recover phi from t
-  let phi = Math.PI / 2 - 2 * Math.atan(tVal); // initial guess
-
-  for (let i = 0; i < 15; i++) {
-    const esin = e * Math.sin(phi);
-    const phiNext = Math.PI / 2 - 2 * Math.atan(tVal * Math.pow((1 - esin) / (1 + esin), e / 2));
-    if (Math.abs(phiNext - phi) < 1e-12) {
-      phi = phiNext;
-      break;
-    }
-    phi = phiNext;
-  }
-
-  const lat = phi * 180 / Math.PI;
-  const lon = (lon0 + theta / n) * 180 / Math.PI;
-
+  // proj4 returns [lon, lat]
+  const [lon, lat] = proj4("EPSG:2260", "WGS84", [x_ft, y_ft]);
   return [lat, lon];
 }
 
