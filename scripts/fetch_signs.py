@@ -3,6 +3,11 @@ from collections import defaultdict, Counter
 from pyproj import Transformer
 import csv
 
+def clean_date(value):
+    if isinstance(value, str) and "T00:00:00.000" in value:
+        return value.replace("T00:00:00.000", "")
+    return value
+
 # ----------------------------------------------------
 # 1. Build URL-style SODA API query
 # ----------------------------------------------------
@@ -68,7 +73,7 @@ for order_number, signs in orders.items():
     from_street = first_non_null(signs, "from_street")
     to_street = first_non_null(signs, "to_street")
     side_of_street = first_non_null(signs, "side_of_street")
-    order_completed_on_date = first_non_null(signs, "order_completed_on_date")
+    order_completed_on_date = clean_date(first_non_null(signs, "order_completed_on_date"))
     distance_from_intersection = first_non_null(signs, "distance_from_intersection")
     arrow_direction = first_non_null(signs, "arrow_direction")
 
