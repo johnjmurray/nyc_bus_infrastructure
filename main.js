@@ -467,6 +467,47 @@ async function loadBusSigns() {
 
 */
 
+// ----------------------------------------------------------
+// Canvas text marker helper
+// ----------------------------------------------------------
+function canvasTextMarker(latlng, text, color, size = 18) {
+  const marker = L.circleMarker(latlng, {
+    radius: 10,
+    stroke: false,
+    fillOpacity: 0,
+    renderer: L.canvas(),
+  });
+
+  marker.on("add", function () {
+    const renderer = this._renderer;
+    if (!renderer) return;
+
+    const origUpdate = renderer._updateCircle;
+    renderer._updateCircle = function(layer) {
+      origUpdate.call(this, layer);
+
+      if (layer === marker) {
+        const ctx = this._ctx;
+        const p = layer._point;
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.font = size + "px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, p.x, p.y);
+        ctx.restore();
+      }
+    };
+  });
+
+  return marker;
+}
+
+
+// ----------------------------------------------------------
+// Rewritten loadBusSigns() using Canvas icons
+// ----------------------------------------------------------
+
 async function loadBusSigns() {
   try {
     const url =
@@ -488,34 +529,34 @@ async function loadBusSigns() {
 
       const desc = (sign.sign_description || "").toUpperCase();
 
-      // ------------------------------
-      // 1. Determine icon + icon color
-      // ------------------------------
+      // ------------------------------------------------------
+      // 1. Determine arrow icon + color (Canvas, not DOM)
+      // ------------------------------------------------------
       let iconChar = null;
       let iconColor = null;
 
       if (desc.includes("SINGLE ARROW")) {
-        iconChar = "\u2192";           // →
+        iconChar = "\u2192";    // →
         iconColor = "darkblue";
 
       } else if (desc.match(/<-+>/)) {
-        iconChar = "\u2194";           // ↔
+        iconChar = "\u2194";    // ↔
         iconColor = "darkblue";
 
       } else if ((desc.includes("LANE") || desc.includes("ONLY")) &&
                  desc.includes("6 O'CLOCK ARROW")) {
-        iconChar = "\u21D3";           // ⇓
-        iconColor = "#B22222";         // brick red
+        iconChar = "\u21D3";    // ⇓
+        iconColor = "#B22222";
 
       } else if ((desc.includes("LANE") || desc.includes("ONLY")) &&
                  desc.includes("7 O'CLOCK ARROW")) {
-        iconChar = "\u21D9";           // ⇙
-        iconColor = "#B22222";         // brick red
+        iconChar = "\u21D9";    // ⇙
+        iconColor = "#B22222";
       }
 
-      // ----------------------------------------------
-      // 2. Existing color logic for circle markers
-      // ----------------------------------------------
+      // ------------------------------------------------------
+      // 2. Determine fallback circle marker color
+      // ------------------------------------------------------
       const signColor = desc.includes("LANE")
         ? "#4B0082"
         : desc.includes("ONLY")
@@ -528,31 +569,28 @@ async function loadBusSigns() {
         ? `${sign.sign_description}<br>Completed: ${sign.order_completed_on_date}`
         : sign.sign_description || "Bus Sign";
 
-      // ----------------------------------------------
-      // 3. If an icon was matched, use an L.divIcon
-      // ----------------------------------------------
+      // ------------------------------------------------------
+      // 3. Draw with Canvas instead of DOM
+      // ------------------------------------------------------
+      let marker;
+
       if (iconChar) {
-        const divIcon = L.divIcon({
-          className: "",
-          html: `<span style="font-size:18px;color:${iconColor};">${iconChar}</span>`
-        });
-
-        L.marker([lat, lon], { icon: divIcon })
-          .bindTooltip(tooltipText)
-          .addTo(busSignsLayer);
-
+        // Fast Canvas text icon marker
+        marker = canvasTextMarker([lat, lon], iconChar, iconColor, 18);
       } else {
-        // Fallback: original circle marker
-        L.circleMarker([lat, lon], {
+        // Lightweight Canvas circle
+        marker = L.circleMarker([lat, lon], {
           radius: 4,
           color: signColor,
           fillColor: signColor,
           fillOpacity: 0.8,
-          weight: 1
-        })
-          .bindTooltip(tooltipText)
-          .addTo(busSignsLayer);
+          weight: 1,
+          renderer: L.canvas()
+        });
       }
+
+      marker.bindTooltip(tooltipText);
+      marker.addTo(busSignsLayer);
     });
 
     console.log(`Loaded ${data.length} bus signs`);
