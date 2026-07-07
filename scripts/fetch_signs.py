@@ -39,9 +39,10 @@ for r in records:
     orders[r["order_number"]].append(r)
 
 # ----------------------------------------------------
-# 4. Prepare coordinate transformer (EPSG:2260 → EPSG:4326)
+# 4. Prepare coordinate transformer (EPSG:2263 → EPSG:4326)
 # ----------------------------------------------------
-transformer = Transformer.from_crs("EPSG:2260", "EPSG:4326", always_xy=True)
+# Use NY State Plane (NAD83) for New York coordinates — EPSG:2263 is the common CRS for NYC datasets.
+transformer = Transformer.from_crs("EPSG:2263", "EPSG:4326", always_xy=True)
 
 # ----------------------------------------------------
 # 5. Aggregate each order_number into one row
@@ -56,14 +57,24 @@ def first_non_null(signs, field):
 
 for order_number, signs in orders.items():
 
-    # Most common X/Y coordinate pair
-    coords = [(s.get("sign_x_coord"), s.get("sign_y_coord")) for s in signs]
-    most_common_pair = Counter(coords).most_common(1)[0][0]
-    x_coord, y_coord = most_common_pair
+    # Most common X/Y coordinate pair — ignore empty pairs so we don't pick (None, None)
+    coords = [
+        (s.get("sign_x_coord"), s.get("sign_y_coord"))
+        for s in signs
+        if s.get("sign_x_coord") and s.get("sign_y_coord")
+    ]
+    if coords:
+        most_common_pair = Counter(coords).most_common(1)[0][0]
+        x_coord, y_coord = most_common_pair
+    else:
+        x_coord, y_coord = (None, None)
 
-    # Coordinate conversion
+    # Coordinate conversion (safe)
     if x_coord and y_coord:
-        lon, lat = transformer.transform(float(x_coord), float(y_coord))
+        try:
+            lon, lat = transformer.transform(float(x_coord), float(y_coord))
+        except Exception:
+            lon, lat = (None, None)
     else:
         lon, lat = (None, None)
 
