@@ -75,73 +75,6 @@ function parseCSV(text) {
 }
 
 // ----------------------------------------------------------
-// EPSG:2263 Projection (Precomputed)
-// ----------------------------------------------------------
-
-const proj2263 = (() => {
-  const usFtToMeters = 0.3048006096012192;
-  const lat1 = 40.66666666666666 * Math.PI / 180;
-  const lat2 = 41.03333333333333 * Math.PI / 180;
-  const lat0 = 40.16666666666666 * Math.PI / 180;
-  const lon0 = -74.0 * Math.PI / 180;
-
-  const x0_ft = 300000.0;
-  const y0_ft = 0.0;
-
-  const a = 6378137.0;
-  const f = 1 / 298.257222101;
-  const e = Math.sqrt(2 * f - f * f);
-
-  function m(phi) {
-    return Math.cos(phi) / Math.sqrt(1 - (e * e) * Math.sin(phi) * Math.sin(phi));
-  }
-
-  function t(phi) {
-    const sinp = Math.sin(phi);
-    const part = (1 - e * sinp) / (1 + e * sinp);
-    return Math.tan(Math.PI / 4 - phi / 2) / Math.pow(part, e / 2);
-  }
-
-  const m1 = m(lat1);
-  const m2 = m(lat2);
-  const t1 = t(lat1);
-  const t2 = t(lat2);
-  const t0 = t(lat0);
-
-  const n = Math.log(m1 / m2) / Math.log(t1 / t2);
-  const F = m1 / (n * Math.pow(t1, n));
-  const rho0 = a * F * Math.pow(t0, n);
-
-  return { usFtToMeters, lon0, x0_ft, y0_ft, a, F, e, n, rho0 };
-})();
-
-function epsg2263ToWGS84(x_ft, y_ft) {
-  const { usFtToMeters, lon0, x0_ft, y0_ft, a, F, e, n, rho0 } = proj2263;
-
-  const x = (x_ft - x0_ft) * usFtToMeters;
-  const y = (y_ft - y0_ft) * usFtToMeters;
-
-  const rho = Math.sqrt(x * x + (rho0 - y) * (rho0 - y));
-  const theta = Math.atan2(x, rho0 - y);
-  const tVal = Math.pow(rho / (a * F), 1 / n);
-
-  let phi = Math.PI / 2 - 2 * Math.atan(tVal);
-  for (let i = 0; i < 15; i++) {
-    const esin = e * Math.sin(phi);
-    const phiNext =
-      Math.PI / 2 -
-      2 * Math.atan(tVal * Math.pow((1 - esin) / (1 + esin), e / 2));
-    if (Math.abs(phiNext - phi) < 1e-12) break;
-    phi = phiNext;
-  }
-
-  const lat = phi * 180 / Math.PI;
-  const lon = (lon0 + theta / n) * 180 / Math.PI;
-
-  return [lat, lon];
-}
-
-// ----------------------------------------------------------
 // GTFS Helpers
 // ----------------------------------------------------------
 
@@ -251,12 +184,13 @@ async function loadBusSigns() {
     const rows = parseCSV(csvText);
 
     const markers = [];
-    for (const s of rows) {
-      const lat = safeNumber(s.latitude);
-      const lon = safeNumber(s.longitude);
-      if (!lat || !lon) continue;
 
-      const desc = s.sign_description || "";
+    for (const sign of rows) {
+      const lat = safeNumber(sign.latitude);
+      const lon = safeNumber(sign.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+      const desc = sign.sign_description || "";
       const U = desc.toUpperCase();
 
       let color;
@@ -265,13 +199,14 @@ async function loadBusSigns() {
       else color = "#6c757d";
 
       const tooltip =
-        `${desc}<br>Order #: ${s.order_number || "N/A"}<br>` +
-        (s.order_completed_on_date ? `Completed: ${s.order_completed_on_date}` : "");
+        `${desc}<br>` +
+        `Order #: ${sign.order_number || "N/A"}<br>` +
+        (sign.order_completed_on_date ? `Completed: ${sign.order_completed_on_date}` : "");
 
       markers.push(
         L.circleMarker([lat, lon], {
           radius: 3,
-          color,
+          color: color,
           fillColor: color,
           fillOpacity: 0.75,
           weight: 1
@@ -280,11 +215,11 @@ async function loadBusSigns() {
     }
 
     L.layerGroup(markers).addTo(busSignsLayer);
-  } catch (e) {
-    console.error("Bus signs failed:", e);
+    console.log(`Loaded ${rows.length} bus signs`);
+  } catch (err) {
+    console.error("CSV bus signs load failed:", err);
   }
 }
-
 // ----------------------------------------------------------
 // Bus Lanes
 // ----------------------------------------------------------
