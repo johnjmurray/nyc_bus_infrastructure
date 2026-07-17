@@ -75,6 +75,45 @@ function parseCSV(text) {
 }
 
 // ----------------------------------------------------------
+// Zoom-based Scaling
+// ----------------------------------------------------------
+
+function getScaledMarkerRadius() {
+  const zoom = map.getZoom();
+  return Math.max(1.5, Math.min(4, zoom / 10));
+}
+
+function getScaledLineWeight() {
+  const zoom = map.getZoom();
+  return Math.max(1.5, Math.min(5, zoom / 5));
+}
+
+function getScaledSignRadius() {
+  const zoom = map.getZoom();
+  return Math.max(2, Math.min(5, zoom / 8));
+}
+
+function updateMarkerAndLineScaling() {
+  const markerRadius = getScaledMarkerRadius();
+  const lineWeight = getScaledLineWeight();
+  const signRadius = getScaledSignRadius();
+
+  busStopsLayer.getLayers().forEach(layer => {
+    if (layer.setRadius) layer.setRadius(markerRadius);
+  });
+
+  busRoutesLayer.getLayers().forEach(layer => {
+    if (layer.setStyle) layer.setStyle({ weight: lineWeight });
+  });
+
+  busSignsLayer.getLayers().forEach(layer => {
+    if (layer.setRadius) layer.setRadius(signRadius);
+  });
+}
+
+map.on("zoom", updateMarkerAndLineScaling);
+
+// ----------------------------------------------------------
 // GTFS Helpers
 // ----------------------------------------------------------
 
@@ -125,7 +164,7 @@ function drawStops(stops) {
 
     markers.push(
       L.circleMarker([lat, lon], {
-        radius: 2.5,
+        radius: getScaledMarkerRadius(),
         color: "#66CCFF",
         fillColor: "#66CCFF",
         fillOpacity: 0.65,
@@ -162,13 +201,26 @@ function drawShapesFromGTFS(shapes, routesMap) {
     const shortName = routesMap[routeId]?.short || routeId;
     const color = randomRouteColor(routeId);
 
-    lines.push(
-      L.polyline(pts, {
-        color,
-        weight: 3,
-        opacity: 0.85
-      }).bindTooltip(shortName)
-    );
+    const polyline = L.polyline(pts, {
+      color,
+      weight: getScaledLineWeight(),
+      opacity: 0.85
+    });
+
+    // Add mouse-following tooltip
+    polyline.on("mousemove", (e) => {
+      polyline.bindTooltip(shortName, {
+        permanent: false,
+        sticky: false,
+        offset: [10, 10]
+      }).setTooltipContent(shortName).openTooltip(e.latlng);
+    });
+
+    polyline.on("mouseout", () => {
+      polyline.closeTooltip();
+    });
+
+    lines.push(polyline);
   }
 
   L.layerGroup(lines).addTo(busRoutesLayer);
@@ -199,18 +251,20 @@ async function loadBusSigns() {
       else color = "#6c757d";
 
       const tooltip =
+        `<div style="max-width: 200px; word-wrap: break-word; white-space: normal;">` +
         `${desc}<br>` +
         `Order #: ${sign.order_number || "N/A"}<br>` +
-        (sign.order_completed_on_date ? `Completed: ${sign.order_completed_on_date}` : "");
+        (sign.order_completed_on_date ? `Completed: ${sign.order_completed_on_date}` : "") +
+        `</div>`;
 
       markers.push(
         L.circleMarker([lat, lon], {
-          radius: 3,
+          radius: getScaledSignRadius(),
           color: color,
           fillColor: color,
           fillOpacity: 0.75,
           weight: 1
-        }).bindTooltip(tooltip)
+        }).bindTooltip(tooltip, { className: "sign-tooltip" })
       );
     }
 
