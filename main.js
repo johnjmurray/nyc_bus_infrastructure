@@ -38,26 +38,30 @@ L.control.layers(
 
 const GTFS_FEEDS = ["gtfs_bx", "gtfs_q", "gtfs_m", "gtfs_si", "gtfs_b", "gtfs_busco"];
 const routeColorCache = {};
-const routeRecords = [];
-const routeOverlapCache = new Map();
-const OVERLAP_TOLERANCE_METERS = 20;
-const MINIMUM_OVERLAP_METERS = 100;
-const METERS_PER_DEGREE_LAT = 111320;
-const REFERENCE_LATITUDE = 40.71;
+let busSignsLoaded = false;
+let busLanesLoaded = false;
 
 function safeNumber(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
 
+function scheduleIdleTask(task, timeout = 0) {
+  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+    return window.requestIdleCallback(() => task(), { timeout: Math.max(1500, timeout) });
+  }
+
+  return setTimeout(task, timeout);
+}
+
 async function fetchText(url) {
-  const resp = await fetch(url, { cache: "no-store" });
+  const resp = await fetch(url, { cache: "force-cache" });
   if (!resp.ok) throw new Error(url);
   return resp.text();
 }
 
 async function fetchJSON(url) {
-  const resp = await fetch(url, { cache: "no-store" });
+  const resp = await fetch(url, { cache: "force-cache" });
   if (!resp.ok) throw new Error(url);
   return resp.json();
 }
@@ -91,8 +95,7 @@ function getScaledMarkerRadius() {
 
 function getScaledLineWeight() {
   const zoom = map.getZoom();
-  // Keep the existing zoom scaling, but make every route line twice as thick.
-  return 2 * Math.max(1.5, Math.min(5, zoom / 5));
+  return Math.max(2, Math.min(6, zoom / 2.5));
 }
 
 function getScaledSignRadius() {
@@ -118,130 +121,7 @@ function updateMarkerAndLineScaling() {
   });
 }
 
-map.on("zoom", updateMarkerAndLineScaling);
-
-// ----------------------------------------------------------
-// Route overlap helpers
-// ----------------------------------------------------------
-
-function toMeters(point) {
-  return {
-    x: point[1] * METERS_PER_DEGREE_LAT * Math.cos(REFERENCE_LATITUDE * Math.PI / 180),
-    y: point[0] * METERS_PER_DEGREE_LAT
-  };
-}
-
-function distancePointToSegment(point, start, end) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const lengthSquared = dx * dx + dy * dy;
-  if (!lengthSquared) return Math.hypot(point.x - start.x, point.y - start.y);
-
-  const t = Math.max(0, Math.min(1,
-    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared
-  ));
-  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
-}
-
-function distancePointToRoute(point, route) {
-  let minimum = Infinity;
-  for (let i = 1; i < route.meterPoints.length; i++) {
-    minimum = Math.min(
-      minimum,
-      distancePointToSegment(point, route.meterPoints[i - 1], route.meterPoints[i])
-    );
-    if (minimum <= OVERLAP_TOLERANCE_METERS) return minimum;
-  }
-  return minimum;
-}
-
-function routeBoundingBox(route) {
-  return route.meterPoints.reduce((box, point) => ({
-    minX: Math.min(box.minX, point.x),
-    minY: Math.min(box.minY, point.y),
-    maxX: Math.max(box.maxX, point.x),
-    maxY: Math.max(box.maxY, point.y)
-  }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
-}
-
-function boxesCouldOverlap(a, b) {
-  return a.minX <= b.maxX + OVERLAP_TOLERANCE_METERS &&
-    a.maxX >= b.minX - OVERLAP_TOLERANCE_METERS &&
-    a.minY <= b.maxY + OVERLAP_TOLERANCE_METERS &&
-    a.maxY >= b.minY - OVERLAP_TOLERANCE_METERS;
-}
-
-function sampleRoute(route) {
-  const samples = [];
-  for (let i = 1; i < route.meterPoints.length; i++) {
-    const start = route.meterPoints[i - 1];
-    const end = route.meterPoints[i];
-    const length = Math.hypot(end.x - start.x, end.y - start.y);
-    const count = Math.max(1, Math.ceil(length / 10));
-    for (let j = 0; j < count; j++) {
-      const t = j / count;
-      samples.push({
-        x: start.x + (end.x - start.x) * t,
-        y: start.y + (end.y - start.y) * t,
-        step: length / count
-      });
-    }
-  }
-  const last = route.meterPoints[route.meterPoints.length - 1];
-  samples.push({ x: last.x, y: last.y, step: 0 });
-  return samples;
-}
-
-function calculateOverlapMeters(route, otherRoute) {
-  if (!boxesCouldOverlap(route.bounds, otherRoute.bounds)) return 0;
-
-  let overlap = 0;
-  const samples = sampleRoute(route);
-  for (let i = 0; i < samples.length - 1; i++) {
-    const sample = samples[i];
-    const next = samples[i + 1];
-    const midpoint = {
-      x: (sample.x + next.x) / 2,
-      y: (sample.y + next.y) / 2
-    };
-    if (distancePointToRoute(midpoint, otherRoute) <= OVERLAP_TOLERANCE_METERS) {
-      overlap += Math.hypot(next.x - sample.x, next.y - sample.y);
-    }
-  }
-  return overlap;
-}
-
-function getOverlappingRoutes(route) {
-  if (routeOverlapCache.has(route)) return routeOverlapCache.get(route);
-
-  const totals = new Map();
-  for (const other of routeRecords) {
-    if (other === route || other.routeKey === route.routeKey) continue;
-    const overlap = calculateOverlapMeters(route, other);
-    if (overlap >= MINIMUM_OVERLAP_METERS) {
-      totals.set(other.routeKey, (totals.get(other.routeKey) || 0) + overlap);
-    }
-  }
-
-  const result = [...totals.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, meters]) => `${name} (${Math.round(meters)} m)`);
-  routeOverlapCache.set(route, result);
-  return result;
-}
-
-function escapeHTML(value) {
-  return String(value).replace(/[&<>"']/g, character => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[character]));
-}
-
-function routeTooltip(route) {
-  const overlapping = getOverlappingRoutes(route);
-  return `<strong>Route ${escapeHTML(route.shortName)}</strong><br>` +
-    `<strong>Overlapping routes:</strong> ` +
-    (overlapping.length ? overlapping.map(escapeHTML).join(", ") : "None");
-}
+map.on("zoomend", updateMarkerAndLineScaling);
 
 // ----------------------------------------------------------
 // GTFS Helpers
@@ -269,20 +149,22 @@ async function loadRoutesForFeed(feed) {
 }
 
 async function loadGTFSFeeds() {
-  for (const feed of GTFS_FEEDS) {
-    try {
-      const [shapesTxt, stopsTxt, routesMap] = await Promise.all([
-        fetchText(`feeds/${feed}/shapes.txt`),
-        fetchText(`feeds/${feed}/stops.txt`),
-        loadRoutesForFeed(feed)
-      ]);
+  await Promise.all(
+    GTFS_FEEDS.map(async (feed) => {
+      try {
+        const [shapesTxt, stopsTxt, routesMap] = await Promise.all([
+          fetchText(`feeds/${feed}/shapes.txt`),
+          fetchText(`feeds/${feed}/stops.txt`),
+          loadRoutesForFeed(feed)
+        ]);
 
-      drawStops(parseCSV(stopsTxt));
-      drawShapesFromGTFS(parseCSV(shapesTxt), routesMap);
-    } catch (e) {
-      console.warn("GTFS load failed:", feed, e);
-    }
-  }
+        drawStops(parseCSV(stopsTxt));
+        drawShapesFromGTFS(parseCSV(shapesTxt), routesMap);
+      } catch (e) {
+        console.warn("GTFS load failed:", feed, e);
+      }
+    })
+  );
 }
 
 function drawStops(stops) {
@@ -330,37 +212,32 @@ function drawShapesFromGTFS(shapes, routesMap) {
     const routeId = id;
     const shortName = routesMap[routeId]?.short || routeId;
     const color = randomRouteColor(routeId);
-    const route = {
-      routeKey: shortName,
-      shortName,
-      points: pts,
-      meterPoints: pts.map(toMeters)
-    };
-    route.bounds = routeBoundingBox(route);
-    routeRecords.push(route);
 
     const polyline = L.polyline(pts, {
       color,
       weight: getScaledLineWeight(),
       opacity: 0.85
     });
-    route.polyline = polyline;
 
-    // Show the route and its qualifying overlaps in a mouse-following tooltip.
-    polyline.bindTooltip(routeTooltip(route), {
+    // Keep tooltip creation lazy so this doesn't block route rendering.
+    polyline.bindTooltip(shortName, {
       permanent: false,
       sticky: false,
       offset: [10, 10]
     });
+
     polyline.on("mousemove", (e) => {
-      polyline.setTooltipContent(routeTooltip(route)).openTooltip(e.latlng);
+      polyline.openTooltip(e.latlng);
+    });
+
+    polyline.on("mouseout", () => {
+      polyline.closeTooltip();
     });
 
     lines.push(polyline);
   }
 
-  // Any newly loaded shapes can change the overlap results for existing routes.
-  routeOverlapCache.clear();
+  // Add the whole route layer in one batch to reduce DOM churn.
   L.layerGroup(lines).addTo(busRoutesLayer);
 }
 
@@ -369,6 +246,9 @@ function drawShapesFromGTFS(shapes, routesMap) {
 // ----------------------------------------------------------
 
 async function loadBusSigns() {
+  if (busSignsLoaded) return;
+  busSignsLoaded = true;
+
   try {
     const csvText = await fetchText("data/sign_output.csv");
     const rows = parseCSV(csvText);
@@ -412,11 +292,15 @@ async function loadBusSigns() {
     console.error("CSV bus signs load failed:", err);
   }
 }
+
 // ----------------------------------------------------------
 // Bus Lanes
 // ----------------------------------------------------------
 
 async function loadBusLanes() {
+  if (busLanesLoaded) return;
+  busLanesLoaded = true;
+
   try {
     const rows = await fetchJSON(
       "https://data.cityofnewyork.us/resource/ycrg-ses3.json?$limit=50000"
@@ -488,14 +372,20 @@ function fitToInfrastructure() {
 async function init() {
   console.log("Loading infrastructure...");
 
-  await loadGTFSFeeds();
+  // Stage 1: load the essential map data first.
+  scheduleIdleTask(async () => {
+    await loadGTFSFeeds();
+    fitToInfrastructure();
+  }, 0);
 
-  requestIdleCallback(() => {
+  // Stage 2: defer non-critical overlays until the browser is idle.
+  scheduleIdleTask(() => {
     loadBusSigns();
-    loadBusLanes();
-  });
+  }, 250);
 
-  fitToInfrastructure();
+  scheduleIdleTask(() => {
+    loadBusLanes();
+  }, 500);
 
   console.log("Map initialized");
 }
