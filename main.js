@@ -38,6 +38,12 @@ L.control.layers(
 
 const GTFS_FEEDS = ["gtfs_bx", "gtfs_q", "gtfs_m", "gtfs_si", "gtfs_b", "gtfs_busco"];
 const routeColorCache = {};
+const routeRecords = [];
+const routeOverlapCache = new Map();
+const OVERLAP_TOLERANCE_METERS = 20;
+const MINIMUM_OVERLAP_METERS = 100;
+const METERS_PER_DEGREE_LAT = 111320;
+const REFERENCE_LATITUDE = 40.71;
 
 function safeNumber(v) {
   const n = Number(v);
@@ -85,7 +91,8 @@ function getScaledMarkerRadius() {
 
 function getScaledLineWeight() {
   const zoom = map.getZoom();
-  return Math.max(1.5, Math.min(5, zoom / 5));
+  // Keep the existing zoom scaling, but make every route line twice as thick.
+  return 2 * Math.max(1.5, Math.min(5, zoom / 5));
 }
 
 function getScaledSignRadius() {
@@ -112,6 +119,129 @@ function updateMarkerAndLineScaling() {
 }
 
 map.on("zoom", updateMarkerAndLineScaling);
+
+// ----------------------------------------------------------
+// Route overlap helpers
+// ----------------------------------------------------------
+
+function toMeters(point) {
+  return {
+    x: point[1] * METERS_PER_DEGREE_LAT * Math.cos(REFERENCE_LATITUDE * Math.PI / 180),
+    y: point[0] * METERS_PER_DEGREE_LAT
+  };
+}
+
+function distancePointToSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (!lengthSquared) return Math.hypot(point.x - start.x, point.y - start.y);
+
+  const t = Math.max(0, Math.min(1,
+    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared
+  ));
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+}
+
+function distancePointToRoute(point, route) {
+  let minimum = Infinity;
+  for (let i = 1; i < route.meterPoints.length; i++) {
+    minimum = Math.min(
+      minimum,
+      distancePointToSegment(point, route.meterPoints[i - 1], route.meterPoints[i])
+    );
+    if (minimum <= OVERLAP_TOLERANCE_METERS) return minimum;
+  }
+  return minimum;
+}
+
+function routeBoundingBox(route) {
+  return route.meterPoints.reduce((box, point) => ({
+    minX: Math.min(box.minX, point.x),
+    minY: Math.min(box.minY, point.y),
+    maxX: Math.max(box.maxX, point.x),
+    maxY: Math.max(box.maxY, point.y)
+  }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+}
+
+function boxesCouldOverlap(a, b) {
+  return a.minX <= b.maxX + OVERLAP_TOLERANCE_METERS &&
+    a.maxX >= b.minX - OVERLAP_TOLERANCE_METERS &&
+    a.minY <= b.maxY + OVERLAP_TOLERANCE_METERS &&
+    a.maxY >= b.minY - OVERLAP_TOLERANCE_METERS;
+}
+
+function sampleRoute(route) {
+  const samples = [];
+  for (let i = 1; i < route.meterPoints.length; i++) {
+    const start = route.meterPoints[i - 1];
+    const end = route.meterPoints[i];
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    const count = Math.max(1, Math.ceil(length / 10));
+    for (let j = 0; j < count; j++) {
+      const t = j / count;
+      samples.push({
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+        step: length / count
+      });
+    }
+  }
+  const last = route.meterPoints[route.meterPoints.length - 1];
+  samples.push({ x: last.x, y: last.y, step: 0 });
+  return samples;
+}
+
+function calculateOverlapMeters(route, otherRoute) {
+  if (!boxesCouldOverlap(route.bounds, otherRoute.bounds)) return 0;
+
+  let overlap = 0;
+  const samples = sampleRoute(route);
+  for (let i = 0; i < samples.length - 1; i++) {
+    const sample = samples[i];
+    const next = samples[i + 1];
+    const midpoint = {
+      x: (sample.x + next.x) / 2,
+      y: (sample.y + next.y) / 2
+    };
+    if (distancePointToRoute(midpoint, otherRoute) <= OVERLAP_TOLERANCE_METERS) {
+      overlap += Math.hypot(next.x - sample.x, next.y - sample.y);
+    }
+  }
+  return overlap;
+}
+
+function getOverlappingRoutes(route) {
+  if (routeOverlapCache.has(route)) return routeOverlapCache.get(route);
+
+  const totals = new Map();
+  for (const other of routeRecords) {
+    if (other === route || other.routeKey === route.routeKey) continue;
+    const overlap = calculateOverlapMeters(route, other);
+    if (overlap >= MINIMUM_OVERLAP_METERS) {
+      totals.set(other.routeKey, (totals.get(other.routeKey) || 0) + overlap);
+    }
+  }
+
+  const result = [...totals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, meters]) => `${name} (${Math.round(meters)} m)`);
+  routeOverlapCache.set(route, result);
+  return result;
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[character]));
+}
+
+function routeTooltip(route) {
+  const overlapping = getOverlappingRoutes(route);
+  return `<strong>Route ${escapeHTML(route.shortName)}</strong><br>` +
+    `<strong>Overlapping routes:</strong> ` +
+    (overlapping.length ? overlapping.map(escapeHTML).join(", ") : "None");
+}
 
 // ----------------------------------------------------------
 // GTFS Helpers
@@ -200,29 +330,37 @@ function drawShapesFromGTFS(shapes, routesMap) {
     const routeId = id;
     const shortName = routesMap[routeId]?.short || routeId;
     const color = randomRouteColor(routeId);
+    const route = {
+      routeKey: shortName,
+      shortName,
+      points: pts,
+      meterPoints: pts.map(toMeters)
+    };
+    route.bounds = routeBoundingBox(route);
+    routeRecords.push(route);
 
     const polyline = L.polyline(pts, {
       color,
       weight: getScaledLineWeight(),
       opacity: 0.85
     });
+    route.polyline = polyline;
 
-    // Add mouse-following tooltip
-    polyline.on("mousemove", (e) => {
-      polyline.bindTooltip(shortName, {
-        permanent: false,
-        sticky: false,
-        offset: [10, 10]
-      }).setTooltipContent(shortName).openTooltip(e.latlng);
+    // Show the route and its qualifying overlaps in a mouse-following tooltip.
+    polyline.bindTooltip(routeTooltip(route), {
+      permanent: false,
+      sticky: false,
+      offset: [10, 10]
     });
-
-    polyline.on("mouseout", () => {
-      polyline.closeTooltip();
+    polyline.on("mousemove", (e) => {
+      polyline.setTooltipContent(routeTooltip(route)).openTooltip(e.latlng);
     });
 
     lines.push(polyline);
   }
 
+  // Any newly loaded shapes can change the overlap results for existing routes.
+  routeOverlapCache.clear();
   L.layerGroup(lines).addTo(busRoutesLayer);
 }
 
