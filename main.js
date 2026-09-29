@@ -19,6 +19,7 @@ L.tileLayer(
 
 const busStopsLayer = L.layerGroup().addTo(map);
 const busRoutesLayer = L.layerGroup().addTo(map);
+const busRouteLabelsLayer = L.layerGroup();
 const busSignsLayer = L.layerGroup();
 const busLanesLayer = L.layerGroup();
 
@@ -47,9 +48,11 @@ const GRID_SIZE_METERS = 100;
 const METERS_PER_DEGREE = 111320;
 const REFERENCE_LATITUDE = 40.71;
 const STOPS_MIN_ZOOM = 13;
+const ROUTE_LABELS_MIN_ZOOM = 14;
 let busSignsLoaded = false;
 let busLanesLoaded = false;
 let stopsVisible = true;
+let routeLabelsVisible = false;
 
 function safeNumber(v) {
   const n = Number(v);
@@ -136,9 +139,18 @@ function updateStopVisibility() {
   else map.removeLayer(busStopsLayer);
 }
 
+function updateRouteLabelsVisibility() {
+  const shouldShow = map.getZoom() >= ROUTE_LABELS_MIN_ZOOM;
+  if (shouldShow === routeLabelsVisible) return;
+  routeLabelsVisible = shouldShow;
+  if (shouldShow) map.addLayer(busRouteLabelsLayer);
+  else map.removeLayer(busRouteLabelsLayer);
+}
+
 map.on("zoomend", () => {
   updateMarkerAndLineScaling();
   updateStopVisibility();
+  updateRouteLabelsVisibility();
 });
 
 // ----------------------------------------------------------
@@ -247,6 +259,77 @@ function routeTooltip(route) {
   return `<strong>Route ${escapeHTML(route.shortName)}</strong><br>` +
     `<strong>Overlapping routes:</strong> ` +
     (overlaps.length ? overlaps.map(escapeHTML).join(", ") : "None");
+}
+
+// ----------------------------------------------------------
+// Route labels
+// ----------------------------------------------------------
+
+function addRouteLabelsToMap(route) {
+  if (!route.meterPoints || route.meterPoints.length < 2) return;
+  
+  // Sample points along the route at regular intervals (every 200 meters)
+  const labels = [];
+  const sampleInterval = 200;
+  let distanceAccum = 0;
+  
+  for (let i = 1; i < route.meterPoints.length; i++) {
+    const start = route.meterPoints[i - 1];
+    const end = route.meterPoints[i];
+    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+    
+    while (distanceAccum + sampleInterval < (distanceAccum + segmentLength)) {
+      distanceAccum += sampleInterval;
+      const t = (distanceAccum - (distanceAccum - segmentLength)) / segmentLength;
+      const meterPoint = {
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t
+      };
+      labels.push(meterPoint);
+    }
+    
+    distanceAccum += segmentLength;
+  }
+  
+  // Convert meter points back to lat/lon and create markers
+  const originalPoints = route.meterPoints.map(mp => {
+    // Reverse of toMeters()
+    const lat = mp.y / METERS_PER_DEGREE;
+    const lon = mp.x / (METERS_PER_DEGREE * Math.cos(REFERENCE_LATITUDE * Math.PI / 180));
+    return [lat, lon];
+  });
+  
+  // Create labels along the route
+  for (const meterPoint of labels) {
+    const lat = meterPoint.y / METERS_PER_DEGREE;
+    const lon = meterPoint.x / (METERS_PER_DEGREE * Math.cos(REFERENCE_LATITUDE * Math.PI / 180));
+    
+    const marker = L.marker([lat, lon], {
+      icon: L.divIcon({
+        className: "route-label",
+        html: `<div style="
+          background-color: ${randomRouteColor(route.shortName)};
+          color: white;
+          border-radius: 50%;
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: bold;
+          font-size: 12px;
+          text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
+          border: 2px solid white;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        ">${escapeHTML(route.shortName)}</div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      }),
+      interactive: false
+    });
+    
+    busRouteLabelsLayer.addLayer(marker);
+  }
 }
 
 // ----------------------------------------------------------
@@ -429,6 +512,12 @@ async function init() {
   scheduleIdleTask(() => {
     buildOverlapIndex();
     console.log(`Indexed ${routes.length} routes for overlap lookup`);
+    
+    // Add route labels after all routes are loaded and indexed
+    for (const route of routes) {
+      addRouteLabelsToMap(route);
+    }
+    console.log(`Added labels for ${routes.length} routes`);
   }, 500);
 
   console.log("Map initialized");
