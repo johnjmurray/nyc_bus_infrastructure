@@ -49,10 +49,12 @@ const METERS_PER_DEGREE = 111320;
 const REFERENCE_LATITUDE = 40.71;
 const STOPS_MIN_ZOOM = 13;
 const ROUTE_LABELS_MIN_ZOOM = 14;
+const LABEL_REDRAW_THRESHOLD = 2;
 let busSignsLoaded = false;
 let busLanesLoaded = false;
 let stopsVisible = true;
 let routeLabelsVisible = false;
+let lastLabelRedrawZoom = null;
 
 function safeNumber(v) {
   const n = Number(v);
@@ -147,10 +149,28 @@ function updateRouteLabelsVisibility() {
   else map.removeLayer(busRouteLabelsLayer);
 }
 
+function redrawRouteLabels() {
+  busRouteLabelsLayer.clearLayers();
+  for (const route of routes) {
+    addRouteLabelsToMap(route);
+  }
+}
+
+function shouldRedrawLabels() {
+  const currentZoom = map.getZoom();
+  if (lastLabelRedrawZoom === null) return true;
+  return Math.abs(currentZoom - lastLabelRedrawZoom) >= LABEL_REDRAW_THRESHOLD;
+}
+
 map.on("zoomend", () => {
   updateMarkerAndLineScaling();
   updateStopVisibility();
   updateRouteLabelsVisibility();
+  
+  if (shouldRedrawLabels()) {
+    lastLabelRedrawZoom = map.getZoom();
+    scheduleIdleTask(redrawRouteLabels, 100);
+  }
 });
 
 // ----------------------------------------------------------
@@ -514,6 +534,7 @@ async function init() {
     console.log(`Indexed ${routes.length} routes for overlap lookup`);
     
     // Add route labels after all routes are loaded and indexed
+    lastLabelRedrawZoom = map.getZoom();
     for (const route of routes) {
       addRouteLabelsToMap(route);
     }
