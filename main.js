@@ -19,7 +19,6 @@ L.tileLayer(
 
 const busStopsLayer = L.layerGroup().addTo(map);
 const busRoutesLayer = L.layerGroup().addTo(map);
-const busRouteLabelsLayer = L.layerGroup();
 const busSignsLayer = L.layerGroup();
 const busLanesLayer = L.layerGroup();
 
@@ -41,20 +40,10 @@ L.control.layers(
 const GTFS_FEEDS = ["gtfs_bx", "gtfs_q", "gtfs_m", "gtfs_si", "gtfs_b", "gtfs_busco"];
 const routeColorCache = {};
 const routes = [];
-const overlapGrid = new Map();
-const OVERLAP_TOLERANCE_METERS = 20;
-const MINIMUM_OVERLAP_METERS = 100;
-const GRID_SIZE_METERS = 100;
-const METERS_PER_DEGREE = 111320;
-const REFERENCE_LATITUDE = 40.71;
-const STOPS_MIN_ZOOM = 13;
-const ROUTE_LABELS_MIN_ZOOM = 14;
-const LABEL_REDRAW_THRESHOLD = 2;
 let busSignsLoaded = false;
 let busLanesLoaded = false;
 let stopsVisible = true;
-let routeLabelsVisible = false;
-let lastLabelRedrawZoom = null;
+const STOPS_MIN_ZOOM = 13;
 
 function safeNumber(v) {
   const n = Number(v);
@@ -95,14 +84,8 @@ function parseCSV(text) {
   return rows;
 }
 
-function escapeHTML(value) {
-  return String(value).replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  }[c]));
-}
-
 // ----------------------------------------------------------
-// Zoom-based scaling and dense-layer visibility
+// Zoom-based scaling
 // ----------------------------------------------------------
 
 function getScaledMarkerRadius() {
@@ -111,7 +94,6 @@ function getScaledMarkerRadius() {
 }
 
 function getScaledLineWeight() {
-  // Twice the original route-line thickness.
   return Math.max(2, Math.min(6, map.getZoom() / 2.5));
 }
 
@@ -141,216 +123,10 @@ function updateStopVisibility() {
   else map.removeLayer(busStopsLayer);
 }
 
-function updateRouteLabelsVisibility() {
-  const shouldShow = map.getZoom() >= ROUTE_LABELS_MIN_ZOOM;
-  if (shouldShow === routeLabelsVisible) return;
-  routeLabelsVisible = shouldShow;
-  if (shouldShow) map.addLayer(busRouteLabelsLayer);
-  else map.removeLayer(busRouteLabelsLayer);
-}
-
-function redrawRouteLabels() {
-  busRouteLabelsLayer.clearLayers();
-  for (const route of routes) {
-    addRouteLabelsToMap(route);
-  }
-}
-
-function shouldRedrawLabels() {
-  const currentZoom = map.getZoom();
-  if (lastLabelRedrawZoom === null) return true;
-  return Math.abs(currentZoom - lastLabelRedrawZoom) >= LABEL_REDRAW_THRESHOLD;
-}
-
 map.on("zoomend", () => {
   updateMarkerAndLineScaling();
   updateStopVisibility();
-  updateRouteLabelsVisibility();
-  
-  if (shouldRedrawLabels()) {
-    lastLabelRedrawZoom = map.getZoom();
-    scheduleIdleTask(redrawRouteLabels, 100);
-  }
 });
-
-// ----------------------------------------------------------
-// Fast route-overlap index
-// ----------------------------------------------------------
-
-function toMeters([lat, lon]) {
-  return {
-    x: lon * METERS_PER_DEGREE * Math.cos(REFERENCE_LATITUDE * Math.PI / 180),
-    y: lat * METERS_PER_DEGREE
-  };
-}
-
-function gridKey(x, y) {
-  return `${Math.floor(x / GRID_SIZE_METERS)},${Math.floor(y / GRID_SIZE_METERS)}`;
-}
-
-function addSegmentToGrid(route, segmentIndex, start, end) {
-  const minX = Math.floor((Math.min(start.x, end.x) - OVERLAP_TOLERANCE_METERS) / GRID_SIZE_METERS);
-  const maxX = Math.floor((Math.max(start.x, end.x) + OVERLAP_TOLERANCE_METERS) / GRID_SIZE_METERS);
-  const minY = Math.floor((Math.min(start.y, end.y) - OVERLAP_TOLERANCE_METERS) / GRID_SIZE_METERS);
-  const maxY = Math.floor((Math.max(start.y, end.y) + OVERLAP_TOLERANCE_METERS) / GRID_SIZE_METERS);
-
-  for (let x = minX; x <= maxX; x++) {
-    for (let y = minY; y <= maxY; y++) {
-      const key = gridKey(x * GRID_SIZE_METERS, y * GRID_SIZE_METERS);
-      if (!overlapGrid.has(key)) overlapGrid.set(key, []);
-      overlapGrid.get(key).push({ route, segmentIndex, start, end });
-    }
-  }
-}
-
-function distancePointToSegment(point, start, end) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const lengthSquared = dx * dx + dy * dy;
-  if (!lengthSquared) return Math.hypot(point.x - start.x, point.y - start.y);
-  const t = Math.max(0, Math.min(1,
-    ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared
-  ));
-  return Math.hypot(point.x - start.x - t * dx, point.y - start.y - t * dy);
-}
-
-function nearbySegments(point) {
-  const result = [];
-  const cellX = Math.floor(point.x / GRID_SIZE_METERS);
-  const cellY = Math.floor(point.y / GRID_SIZE_METERS);
-  for (let x = cellX - 1; x <= cellX + 1; x++) {
-    for (let y = cellY - 1; y <= cellY + 1; y++) {
-      const segments = overlapGrid.get(gridKey(x * GRID_SIZE_METERS, y * GRID_SIZE_METERS));
-      if (segments) result.push(...segments);
-    }
-  }
-  return result;
-}
-
-function buildOverlapIndex() {
-  overlapGrid.clear();
-  for (const route of routes) {
-    for (let i = 1; i < route.meterPoints.length; i++) {
-      addSegmentToGrid(route, i, route.meterPoints[i - 1], route.meterPoints[i]);
-    }
-  }
-}
-
-function getOverlappingRouteNames(route) {
-  if (route.overlaps) return route.overlaps;
-
-  const overlapByRoute = new Map();
-  const seen = new Set();
-
-  // A 25 m sample interval is accurate enough for the 100 m threshold and
-  // avoids the old all-segments-against-all-segments comparison.
-  for (let i = 1; i < route.meterPoints.length; i++) {
-    const start = route.meterPoints[i - 1];
-    const end = route.meterPoints[i];
-    const length = Math.hypot(end.x - start.x, end.y - start.y);
-    const count = Math.max(1, Math.ceil(length / 25));
-    const step = length / count;
-
-    for (let j = 0; j < count; j++) {
-      const t = (j + 0.5) / count;
-      const point = { x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t };
-      for (const candidate of nearbySegments(point)) {
-        if (candidate.route === route) continue;
-        const candidateKey = `${candidate.route.routeKey}:${i}:${candidate.segmentIndex}`;
-        if (seen.has(candidateKey)) continue;
-        seen.add(candidateKey);
-        if (distancePointToSegment(point, candidate.start, candidate.end) <= OVERLAP_TOLERANCE_METERS) {
-          overlapByRoute.set(candidate.route.routeKey,
-            (overlapByRoute.get(candidate.route.routeKey) || 0) + step);
-        }
-      }
-    }
-  }
-
-  route.overlaps = [...overlapByRoute.entries()]
-    .filter(([, meters]) => meters >= MINIMUM_OVERLAP_METERS)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, meters]) => `${name} (${Math.round(meters)} m)`);
-  return route.overlaps;
-}
-
-function routeTooltip(route) {
-  const overlaps = getOverlappingRouteNames(route);
-  return `<strong>Route ${escapeHTML(route.shortName)}</strong><br>` +
-    `<strong>Overlapping routes:</strong> ` +
-    (overlaps.length ? overlaps.map(escapeHTML).join(", ") : "None");
-}
-
-// ----------------------------------------------------------
-// Route labels
-// ----------------------------------------------------------
-
-function addRouteLabelsToMap(route) {
-  if (!route.meterPoints || route.meterPoints.length < 2) return;
-  
-  // Sample points along the route at regular intervals (every 200 meters)
-  const labels = [];
-  const sampleInterval = 200;
-  let distanceAccum = 0;
-  
-  for (let i = 1; i < route.meterPoints.length; i++) {
-    const start = route.meterPoints[i - 1];
-    const end = route.meterPoints[i];
-    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
-    
-    while (distanceAccum + sampleInterval < (distanceAccum + segmentLength)) {
-      distanceAccum += sampleInterval;
-      const t = (distanceAccum - (distanceAccum - segmentLength)) / segmentLength;
-      const meterPoint = {
-        x: start.x + (end.x - start.x) * t,
-        y: start.y + (end.y - start.y) * t
-      };
-      labels.push(meterPoint);
-    }
-    
-    distanceAccum += segmentLength;
-  }
-  
-  // Convert meter points back to lat/lon and create markers
-  const originalPoints = route.meterPoints.map(mp => {
-    // Reverse of toMeters()
-    const lat = mp.y / METERS_PER_DEGREE;
-    const lon = mp.x / (METERS_PER_DEGREE * Math.cos(REFERENCE_LATITUDE * Math.PI / 180));
-    return [lat, lon];
-  });
-  
-  // Create labels along the route
-  for (const meterPoint of labels) {
-    const lat = meterPoint.y / METERS_PER_DEGREE;
-    const lon = meterPoint.x / (METERS_PER_DEGREE * Math.cos(REFERENCE_LATITUDE * Math.PI / 180));
-    
-    const marker = L.marker([lat, lon], {
-      icon: L.divIcon({
-        className: "route-label",
-        html: `<div style="
-          background-color: ${randomRouteColor(route.shortName)};
-          color: white;
-          border-radius: 50%;
-          width: 28px;
-          height: 28px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-weight: bold;
-          font-size: 12px;
-          text-shadow: 1px 1px 1px rgba(0,0,0,0.3);
-          border: 2px solid white;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        ">${escapeHTML(route.shortName)}</div>`,
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
-      }),
-      interactive: false
-    });
-    
-    busRouteLabelsLayer.addLayer(marker);
-  }
-}
 
 // ----------------------------------------------------------
 // GTFS Helpers
@@ -429,9 +205,7 @@ function drawShapesFromGTFS(shapes, routesMap) {
     const shortName = routesMap[id]?.short || id;
     const route = {
       routeKey: `${shortName}:${id}`,
-      shortName,
-      meterPoints: pts.map(toMeters),
-      overlaps: null
+      shortName
     };
     routes.push(route);
 
@@ -441,12 +215,7 @@ function drawShapesFromGTFS(shapes, routesMap) {
       weight: getScaledLineWeight(),
       opacity: 0.85
     });
-    route.polyline = polyline;
     polyline.bindTooltip(shortName, { permanent: false, sticky: false, offset: [10, 10] });
-    polyline.on("mousemove", e => {
-      polyline.setTooltipContent(routeTooltip(route)).openTooltip(e.latlng);
-    });
-    polyline.on("mouseout", () => polyline.closeTooltip());
     lines.push(polyline);
   }
   L.layerGroup(lines).addTo(busRoutesLayer);
@@ -526,21 +295,6 @@ async function init() {
   console.log("Loading infrastructure...");
   await loadGTFSFeeds();
   fitToInfrastructure();
-
-  // Indexing is deferred until the route geometry is visible. It no longer
-  // blocks initial map rendering or repeats for each hovered route.
-  scheduleIdleTask(() => {
-    buildOverlapIndex();
-    console.log(`Indexed ${routes.length} routes for overlap lookup`);
-    
-    // Add route labels after all routes are loaded and indexed
-    lastLabelRedrawZoom = map.getZoom();
-    for (const route of routes) {
-      addRouteLabelsToMap(route);
-    }
-    console.log(`Added labels for ${routes.length} routes`);
-  }, 500);
-
   console.log("Map initialized");
 }
 
