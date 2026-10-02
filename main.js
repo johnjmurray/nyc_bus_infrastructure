@@ -45,16 +45,16 @@ let busLanesLoaded = false;
 let stopsVisible = true;
 const STOPS_MIN_ZOOM = 13;
 
-// NY State Plane Coordinate System (Long Island/EPSG:2263) parameters
+// New York Long Island State Plane (EPSG:2263) parameters
 const NY_STATE_PLANE = {
-  a: 6378137.0,                    // WGS84 semi-major axis
-  f: 1.0 / 298.257223563,          // WGS84 flattening
-  lat0: 40.166666667,              // standard parallel 1
-  lat1: 41.033333333,              // standard parallel 2
-  lon0: -74.0,                     // central meridian
-  falseEasting: 984250.0,          // false easting (ft)
-  falseNorthing: 0.0,              // false northing (ft)
-  scale: 0.9999330000000001        // scale factor
+  a: 6378137.0,
+  f: 1 / 298.257223563,
+  lat0: 40.1666666667,
+  lat1: 41.0333333333,
+  lon0: -74.0,
+  falseEasting: 984250.0,
+  falseNorthing: 0.0,
+  scale: 0.999933
 };
 
 function safeNumber(v) {
@@ -96,45 +96,41 @@ function parseCSV(text) {
   return rows;
 }
 
-// Convert NY State Plane coordinates (Long Island, feet) to lat/lon
-function statePlaneToLatLon(easting, northing) {
-  // Convert feet to meters
-  const e = easting * 0.3048;
-  const n = northing * 0.3048;
-
+function statePlaneToLatLon(xFeet, yFeet) {
   const a = NY_STATE_PLANE.a;
   const f = NY_STATE_PLANE.f;
-  const lat0 = NY_STATE_PLANE.lat0 * Math.PI / 180;
-  const lat1 = NY_STATE_PLANE.lat1 * Math.PI / 180;
-  const lon0 = NY_STATE_PLANE.lon0 * Math.PI / 180;
-  const k0 = NY_STATE_PLANE.scale;
-  const x0 = NY_STATE_PLANE.falseEasting * 0.3048;
-  const y0 = NY_STATE_PLANE.falseNorthing * 0.3048;
+  const e = xFeet * 0.3048;
+  const n = yFeet * 0.3048;
 
   const e2 = 2 * f - f * f;
   const ep2 = e2 / (1 - e2);
-  const n_param = (a - a * (1 - e2)) / (a * Math.sqrt(1 - e2));
+  const lat0 = NY_STATE_PLANE.lat0 * Math.PI / 180;
+  const lat1 = NY_STATE_PLANE.lat1 * Math.PI / 180;
+  const lon0 = NY_STATE_PLANE.lon0 * Math.PI / 180;
+  const x0 = NY_STATE_PLANE.falseEasting * 0.3048;
+  const y0 = NY_STATE_PLANE.falseNorthing * 0.3048;
+  const k0 = NY_STATE_PLANE.scale;
 
-  const x = e - x0;
-  const y = n - y0;
-  const m = y / k0;
+  const m = (n - y0) / k0;
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
   const mu = m / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 * e2 * e2 / 256));
 
-  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
-  const footpointLat = mu + (3 * e1 / 2 - 27 * e1 * e1 * e1 / 32) * Math.sin(2 * mu) +
-    (21 * e1 * e1 / 16 - 55 * e1 * e1 * e1 * e1 / 32) * Math.sin(4 * mu);
+  const C = a * (1 - e2) / Math.pow(1 - e2 * Math.sin(mu) * Math.sin(mu), 1.5);
+  const T = Math.tan(mu) * Math.tan(mu);
+  const N = a / Math.sqrt(1 - e2 * Math.sin(mu) * Math.sin(mu));
+  const R = a * (1 - e2) / Math.pow(1 - e2 * Math.sin(mu) * Math.sin(mu), 1.5);
+  const D = (e - x0) / (N * k0);
 
-  const c1 = ep2 * Math.cos(footpointLat) * Math.cos(footpointLat);
-  const t1 = Math.tan(footpointLat) * Math.tan(footpointLat);
-  const r1 = a * (1 - e2) / Math.sqrt(Math.pow(1 - e2 * Math.sin(footpointLat), 3));
-  const d = x / (r1 * k0);
+  const lat = mu - (N * Math.tan(mu) / R) * (
+    (D * D) / 2 -
+    (5 + 3 * T + 10 * C - 4 * C * C - 9 * ep2) * Math.pow(D, 4) / 24 +
+    (61 + 90 * T + 298 * C + 45 * T * T - 252 * ep2 - 3 * C * C) * Math.pow(D, 6) / 720
+  );
 
-  const lat = footpointLat - (Math.tan(footpointLat) / r1) * (d * d / 2 -
-    (d * d * d * d / 24) * (5 + 3 * t1 + 10 * c1 - 4 * c1 * c1 - 9 * ep2) +
-    (d * d * d * d * d * d / 720) * (61 + 90 * t1 + 28 * t1 * t1 + 45 * ep2 - 252 * ep2 * ep2 - 3 * c1 * c1));
-
-  const lon = (d - (d * d * d / 6) * (1 + 2 * t1 + c1) +
-    (d * d * d * d * d / 120) * (5 - 2 * c1 + 28 * t1 - 3 * c1 * c1 - 8 * ep2 * ep2)) / Math.cos(footpointLat) + lon0;
+  const lon = lon0 + (
+    D - (1 + 2 * T + C) * Math.pow(D, 3) / 6 +
+    (5 - 2 * C + 28 * T - 3 * C * C + 8 * ep2 + 24 * T * T) * Math.pow(D, 5) / 120
+  ) / Math.cos(mu);
 
   return [lat * 180 / Math.PI, lon * 180 / Math.PI];
 }
@@ -280,29 +276,32 @@ function drawShapesFromGTFS(shapes, routesMap) {
 // Bus Signs - NYC DOT Sign Order Dataset
 // ----------------------------------------------------------
 
+function resolveSignCoordinates(sign) {
+  const x = safeNumber(sign.x ?? sign.x_coord ?? sign.X ?? sign.X_COORD ?? sign.longitude);
+  const y = safeNumber(sign.y ?? sign.y_coord ?? sign.Y ?? sign.Y_COORD ?? sign.latitude);
+
+  if (x == null || y == null) return null;
+
+  const [lat, lon] = statePlaneToLatLon(x, y);
+  return { lat, lon };
+}
+
 async function fetchSignsInBounds() {
   try {
-    // Get current map bounds
     const bounds = map.getBounds();
-    const sw = bounds.getSouthWest();
-    const ne = bounds.getNorthEast();
+    const allSigns = await fetchJSON(
+      "https://data.cityofnewyork.us/resource/erm2-nwe9.json?$limit=100000"
+    );
 
-    // Fetch all signs from NYC DOT dataset
-    const allSigns = await fetchJSON("https://data.cityofnewyork.us/resource/erm2-nwe9.json?$limit=100000");
-
-    // Filter signs within current bounds and convert coordinates
     const markers = [];
     for (const sign of allSigns) {
-      const x = safeNumber(sign.x);
-      const y = safeNumber(sign.y);
-      if (!x || !y) continue;
+      const coords = resolveSignCoordinates(sign);
+      if (!coords) continue;
 
-      const [lat, lon] = statePlaneToLatLon(x, y);
+      const { lat, lon } = coords;
+      if (!bounds.contains([lat, lon])) continue;
 
-      // Check if within current map bounds
-      if (lat < sw.lat || lat > ne.lat || lon < sw.lng || lon > ne.lng) continue;
-
-      const desc = sign.sign_description || "";
+      const desc = sign.sign_description || sign.description || "";
       const upper = desc.toUpperCase();
       const color = upper.includes("LANE") || upper.includes("ONLY") ? "#4B0082" :
         upper.includes("STOP") ? "#FF6B6B" : "#6c757d";
@@ -317,7 +316,6 @@ async function fetchSignsInBounds() {
       }).bindTooltip(`${desc}<br>Order #: ${sign.order_number || "N/A"}`, { className: "sign-tooltip" }));
     }
 
-    // Clear previous signs and add new ones
     busSignsLayer.clearLayers();
     if (markers.length > 0) {
       L.layerGroup(markers).addTo(busSignsLayer);
@@ -327,11 +325,10 @@ async function fetchSignsInBounds() {
     }
   } catch (err) {
     console.error("Failed to fetch signs:", err);
-    alert("Failed to fetch signs: " + err.message);
+    alert("Failed to fetch signs: " + (err?.message || err));
   }
 }
 
-// Add control button for fetching signs
 const fetchSignsControl = L.control({ position: "topleft" });
 fetchSignsControl.onAdd = function () {
   const div = L.DomUtil.create("div", "leaflet-bar");
@@ -350,7 +347,6 @@ fetchSignsControl.onAdd = function () {
   button.style.cursor = "pointer";
   button.style.fontSize = "14px";
   button.style.fontWeight = "bold";
-  button.style.marginBottom = "10px";
   button.style.display = "block";
   button.style.width = "100%";
 
