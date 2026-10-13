@@ -5,8 +5,10 @@
 const map = L.map("map", { preferCanvas: true }).setView([40.71, -74.00], 12);
 const canvasRenderer = L.canvas({ padding: 0.5 });
 
+const CARTO_API_KEY = window.CARTO_API_KEY || "";
+
 L.tileLayer(
-  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+  `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png${CARTO_API_KEY ? `?api_key=${encodeURIComponent(CARTO_API_KEY)}` : ""}`,
   {
     attribution: "© OpenStreetMap contributors © CARTO",
     maxZoom: 19
